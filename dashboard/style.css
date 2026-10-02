@@ -748,6 +748,26 @@ a {
   font-variant-numeric: tabular-nums;
 }
 
+/* The mode line takes the room the two preset buttons do not, so that row reads as
+ * one state and two actions rather than three equal buttons. */
+.entry__mode {
+  margin-inline-end: auto;
+}
+
+/* The worker's own sentence about what "armed" means, and whether the saved setting
+ * could be read. Muted and last: it is standing context, not an outcome. */
+.entry__notice {
+  max-width: 70ch;
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  text-wrap: pretty;
+}
+
+.entry__notice:empty {
+  display: none;
+}
+
 /* An outcome is a sentence, not a value in a table. Out of the flow when empty
  * so it claims none of the gaps, but never display:none — a live region that is
  * display:none is not announced when it refills. */

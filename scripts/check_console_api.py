@@ -26,6 +26,7 @@ import json
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -117,13 +118,19 @@ def free_port():
 
 
 @contextlib.contextmanager
-def gateway(base, interval=60, page_size=PAGE_SIZE, max_pages=50):
-    """The real worker in --serve, on loopback, with every option an operational one."""
+def gateway(base, interval=60, page_size=PAGE_SIZE, max_pages=50, state_file=None):
+    """The real worker in --serve, on loopback, with every option an operational one.
+
+    state_file is the production --state-file, pointed at the caller's own temporary
+    directory so a check never touches the /state volume and never inherits whatever
+    another run left in it.
+    """
     port = free_port()
     process = subprocess.Popen(
         [sys.executable, str(HERE / "retain.py"), "--serve", "--api-base", base,
          "--listen", f"127.0.0.1:{port}", "--interval", str(interval),
-         "--page-size", str(page_size), "--max-pages", str(max_pages), "--timeout", "5"],
+         "--page-size", str(page_size), "--max-pages", str(max_pages), "--timeout", "5",
+         *([ "--state-file", str(state_file)] if state_file else [])],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     output = []
@@ -222,14 +229,19 @@ def check_defaults():
         ("/api/snapshots/summary", "/api/snapshots/events", "/api/snapshots/delete",
          "/api/security/entry"), \
         "the four endpoint paths moved"
-    assert retain.ENTRY_CAMERAS == ("camera_1", "camera_4"), \
-        f"entry cameras {retain.ENTRY_CAMERAS!r}"
+    assert retain.ENTRY_CAMERAS == ("camera_1", "camera_2", "camera_3"), \
+        f"the cameras a person may arm {retain.ENTRY_CAMERAS!r}"
+    assert retain.ALWAYS_CAMERA == "camera_4", \
+        f"the always-armed camera is {retain.ALWAYS_CAMERA!r}"
+    assert retain.STATE_FILE == "/state/entry.json", \
+        f"the saved arming is at {retain.STATE_FILE!r}"
     assert retain.EVENTS_PAGE_SIZE == 25, f"the archive page size is {retain.EVENTS_PAGE_SIZE!r}"
     assert retain.CAMERA_FILTERS == ("all", "camera_1", "camera_2", "camera_3", "camera_4"), \
         f"the camera filters {retain.CAMERA_FILTERS!r}"
     print("ok  0.0.0.0:8090 by default, four exact paths, both dashboard Hosts, "
           "at most 1000 ids and 64 KiB per request, 25 rows per archive page, four "
-          "camera filters plus all, entry arming on cameras 1 and 4 only")
+          "camera filters plus all, entry review armed by hand on cameras 1-3 with "
+          "camera_4 always armed and saved in /state/entry.json")
 
 
 def check_guards():
@@ -756,167 +768,406 @@ def check_poll_never_deletes():
 
 
 def entry_state(port):
-    """The arming status, over the real path, with no action header — it is a read."""
+    """The arming status, over the real path, with no action header — it is a read.
+
+    Every field is checked, because a reply this page cannot read is a status it does not
+    have: shown as unavailable rather than filled in with a guess. The mode has to agree
+    with the three flags it is derived from, camera_4 has to be armed with no moment, and
+    the three manual cameras must agree with themselves — armed with a moment, or off with
+    none.
+    """
     status, _headers, body = call(port, "GET", retain.ENTRY_PATH, origin=None, action=None)
     assert status == 200, f"the entry status answered HTTP {status}: {body!r}"
     payload = json.loads(body)
-    assert set(payload) == {"cameras", "notice", "state"}, f"entry status keys {sorted(payload)}"
-    assert payload["cameras"] == ["camera_1", "camera_4"], f"entry cameras {payload['cameras']}"
-    assert set(payload["state"]) == {"camera_1", "camera_4"}, f"entry state {sorted(payload['state'])}"
+    assert set(payload) == {"cameras", "mode", "always_armed", "notice", "state"}, \
+        f"entry status keys {sorted(payload)}"
+    assert payload["cameras"] == list(retain.CAMERAS), f"entry cameras {payload['cameras']}"
+    assert payload["always_armed"] == retain.ALWAYS_CAMERA, \
+        f"the always-armed camera is reported as {payload['always_armed']!r}"
+    assert set(payload["state"]) == set(retain.CAMERAS), f"entry state {sorted(payload['state'])}"
+    for camera, row in payload["state"].items():
+        assert isinstance(row["ready"], bool) and isinstance(row["armed"], bool), \
+            f"{camera} state {row}"
+        if camera == retain.ALWAYS_CAMERA:
+            assert row["armed"] is True and row["armed_since"] is None, \
+                f"the always-armed camera is not always armed: {row}"
+        elif row["armed"]:
+            assert isinstance(row["armed_since"], (int, float)) and row["armed_since"] > 0, \
+                f"{camera} is armed with no moment: {row}"
+        else:
+            assert row["armed_since"] is None, f"{camera} is off but kept a moment: {row}"
+    manual = {camera: payload["state"][camera]["armed"] for camera in retain.ENTRY_CAMERAS}
+    expected = "home" if not any(manual.values()) else ("away" if all(manual.values()) else "custom")
+    assert payload["mode"] == expected, \
+        f"the reply says {payload['mode']!r} for {manual}"
     return payload
 
 
 def arm(port, camera, armed, **overrides):
-    """One arming POST. The action header is the one the arming expects unless a
-    case deliberately sends a different one."""
+    """One arming POST for one camera. The action header is the one the arming expects
+    unless a case deliberately sends a different one."""
     kwargs = {"body": {"camera": camera, "armed": armed},
               "action": retain.ENTRY_ACTION_VALUE}
     kwargs.update(overrides)
     return call(port, "POST", retain.ENTRY_PATH, **kwargs)
 
 
-def check_entry_arming():
-    """The arming write, at the real boundary: refused by default, refused until the
-    zone exists, and never a substitute for the delete action or for Frigate's config."""
+def preset(port, mode, **overrides):
+    """One preset POST, Home or Away, for all three cameras at once."""
+    kwargs = {"body": {"mode": mode}, "action": retain.ENTRY_ACTION_VALUE}
+    kwargs.update(overrides)
+    return call(port, "POST", retain.ENTRY_PATH, **kwargs)
+
+
+def check_entry_reads_home_and_camera_4_is_always():
+    """A fresh process is Home, with camera_4 armed and no arming moment of its own."""
     fake = FakeFrigate(console_fixture())
-    with serving(fake) as base:
-        with gateway(base) as (port, output):
-            first = entry_state(port)
-            assert all(not row["armed"] and row["armed_since"] is None
-                       for row in first["state"].values()), \
-                f"a fresh process was not disarmed: {first['state']}"
-            assert "disarmed" in first["notice"], f"the restart notice is missing: {first['notice']}"
-            assert fake.deletes == [], f"reading the status deleted {fake.deletes}"
-            print("ok  a fresh process answers both cameras disarmed with no armed_since, and "
-                  "says in the reply that arming does not survive a restart")
+    with tempfile.TemporaryDirectory() as folder:
+        with serving(fake) as base:
+            with gateway(base, state_file=Path(folder) / "entry.json") as (port, output):
+                first = entry_state(port)
+                assert first["mode"] == "home", f"a fresh process is {first['mode']!r}"
+                for camera in retain.ENTRY_CAMERAS:
+                    row = first["state"][camera]
+                    assert not row["armed"] and row["armed_since"] is None, \
+                        f"a fresh process armed {camera}: {row}"
+                assert first["state"][retain.ALWAYS_CAMERA] == {"armed": True, "ready": True,
+                                                                "armed_since": None}, \
+                    f"camera_4 on a fresh process: {first['state'][retain.ALWAYS_CAMERA]}"
+                assert "always armed" in first["notice"], f"the notice is missing: {first['notice']}"
+                assert "restart" in first["notice"].lower(), \
+                    f"the notice does not say the setting survives: {first['notice']}"
+                assert "fighting" not in first["notice"].lower(), \
+                    "the notice claims a rule that does not exist"
+                assert fake.deletes == [], f"reading the status deleted {fake.deletes}"
+                assert not (Path(folder) / "entry.json").exists(), \
+                    "reading the status wrote the state file"
+                text = leaks(output)
+                assert "entry: home," in text, f"the status was not logged:\n{text}"
+    print("ok  a fresh process answers Home on cameras 1-3 with no arming moment, camera_4 armed "
+          "with none of its own, the notice saying what is kept and what cannot be turned off, "
+          "and nothing written to disk")
 
-            # Refusals, each proven to leave the state exactly as it was.
-            refusals = (
-                ("another camera's Host", dict(host="192.0.2.9:8088")),
-                ("no Origin", dict(origin=None)),
-                ("a foreign Origin", dict(origin="evil.invalid")),
-                ("an https Origin", dict(origin="https://127.0.0.1:8088")),
-                ("a form content type", dict(content_type="text/plain")),
-                ("no content type", dict(content_type=None)),
-                ("the delete action header", dict(action="delete")),
-                ("no action header", dict(action=None)),
-            )
-            for name, kwargs in refusals:
-                status, _headers, body = arm(port, "camera_1", True, **kwargs)
-                assert status in (400, 403, 415), \
-                    f"arming with {name} answered HTTP {status} instead of refusing: {body!r}"
-                assert all(not row["armed"] for row in entry_state(port)["state"].values()), \
-                    f"arming with {name} changed the state anyway"
-            # The path is exact and takes no query, so the same guards answer it.
-            for name, suffix in (("a query string", "?camera=camera_1"),
-                                 ("a path suffix", "/now")):
-                status, _headers, body = call(port, "POST", retain.ENTRY_PATH + suffix,
-                                              body={"camera": "camera_1", "armed": True},
-                                              action=retain.ENTRY_ACTION_VALUE)
-                assert status in (400, 404), \
-                    f"arming with {name} answered HTTP {status} instead of refusing: {body!r}"
-            assert all(not row["armed"] for row in entry_state(port)["state"].values()), \
-                "arming with a query string or a path suffix changed the state anyway"
-            print(f"ok  {len(refusals) + 2} refusal shapes on the arming POST — foreign Host, "
-                  "missing or foreign Origin, https Origin, wrong or absent content type, the "
-                  "delete action header, no action header, a query string and a path suffix — "
-                  "each refused with the state unchanged")
 
-            # Bodies, before any of them can arm anything.
-            bodies = (
-                ("camera_2", dict(body={"camera": "camera_2", "armed": True})),
-                ("camera_3", dict(body={"camera": "camera_3", "armed": True})),
-                ("an unknown camera", dict(body={"camera": "camera_9", "armed": True})),
-                ("a missing camera", dict(body={"armed": True})),
-                ("a missing armed", dict(body={"camera": "camera_1"})),
-                ("a third key", dict(body={"camera": "camera_1", "armed": True, "until": 99})),
-                ("a string true", dict(body={"camera": "camera_1", "armed": "true"})),
-                ("a numeric 1", dict(body={"camera": "camera_1", "armed": 1})),
-                ("a list", dict(body=["camera_1", True])),
-                ("a string", dict(body="camera_1")),
-                ("null", dict(raw=b"null")),
-                ("an oversized body", dict(body={"camera": "camera_1", "armed": True,
-                                                 "pad": "x" * (retain.MAX_BODY_BYTES + 1)})),
-            )
-            for name, kwargs in bodies:
-                status, _headers, body = call(port, "POST", retain.ENTRY_PATH,
-                                              action=retain.ENTRY_ACTION_VALUE, **kwargs)
-                assert status in (400, 413), \
-                    f"a body naming {name} answered HTTP {status}: {body!r}"
-                assert all(not row["armed"] for row in entry_state(port)["state"].values()), \
-                    f"a body naming {name} armed something"
-            print(f"ok  {len(bodies)} bodies refused with HTTP 400 or 413 — camera_2, camera_3, an "
-                  "unknown camera, a missing key, a third key, a string or numeric armed, "
-                  "four wrong JSON types and an oversized body — each before anything could "
-                  "be armed")
+def check_entry_write_refusals():
+    """Every shape that is not the dashboard's own arming is refused, and camera_4 cannot
+    be written at all."""
+    fake = FakeFrigate(console_fixture())
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "entry.json"
+        with serving(fake) as base:
+            with gateway(base, state_file=path) as (port, output):
+                # Refusals, each proven to leave the state exactly as it was.
+                refusals = (
+                    ("another camera's Host", dict(host="192.0.2.9:8088")),
+                    ("no Origin", dict(origin=None)),
+                    ("a foreign Origin", dict(origin="evil.invalid")),
+                    ("an https Origin", dict(origin="https://127.0.0.1:8088")),
+                    ("a form content type", dict(content_type="text/plain")),
+                    ("no content type", dict(content_type=None)),
+                    ("the delete action header", dict(action="delete")),
+                    ("no action header", dict(action=None)),
+                )
+                for name, kwargs in refusals:
+                    status, _headers, body = arm(port, "camera_1", True, **kwargs)
+                    assert status in (400, 403, 415), \
+                        f"arming with {name} answered HTTP {status} instead of refusing: {body!r}"
+                    assert entry_state(port)["mode"] == "home", \
+                        f"arming with {name} changed the state anyway"
+                # The path is exact and takes no query, so the same guards answer it.
+                for name, suffix in (("a query string", "?camera=camera_1"),
+                                     ("a path suffix", "/now")):
+                    status, _headers, body = call(port, "POST", retain.ENTRY_PATH + suffix,
+                                                  body={"camera": "camera_1", "armed": True},
+                                                  action=retain.ENTRY_ACTION_VALUE)
+                    assert status in (400, 404), \
+                        f"arming with {name} answered HTTP {status} instead of refusing: {body!r}"
+                assert entry_state(port)["mode"] == "home", \
+                    "arming with a query string or a path suffix changed the state anyway"
+                print(f"ok  {len(refusals) + 2} refusal shapes on the arming POST — foreign Host, "
+                      "missing or foreign Origin, https Origin, wrong or absent content type, the "
+                      "delete action header, no action header, a query string and a path suffix — "
+                      "each refused with the state unchanged")
 
-            # The one that should work, and what it says.
-            status, _headers, body = arm(port, "camera_1", True)
-            assert status == 200, f"arming a configured camera answered HTTP {status}: {body!r}"
-            armed = json.loads(body)["state"]["camera_1"]
-            assert armed["armed"] is True and isinstance(armed["armed_since"], (int, float)), \
-                f"arming did not report a moment: {armed}"
-            first_since = armed["armed_since"]
-            # Idempotent: the same request again must not slide the boundary forwards.
-            status, _headers, body = arm(port, "camera_1", True)
-            assert status == 200, f"re-arming answered HTTP {status}: {body!r}"
-            assert json.loads(body)["state"]["camera_1"]["armed_since"] == first_since, \
-                "re-arming moved the armed_since"
-            # Disarm is always allowed, including on a camera that is not ready.
-            status, _headers, body = arm(port, "camera_1", False)
-            assert status == 200, f"disarming answered HTTP {status}: {body!r}"
-            assert json.loads(body)["state"]["camera_1"] == {"ready": True, "armed": False,
-                                                            "armed_since": None}, \
-                "disarming did not clear the state"
-            assert fake.deletes == [], f"the arming write deleted {fake.deletes}"
-            print("ok  a configured camera_1 arms with one POST and a real armed_since, re-arming "
-                  "is idempotent, disarming always works, and no arming request deleted anything")
+                # Bodies, before any of them can arm anything.
+                bodies = (
+                    ("camera_4 armed", dict(body={"camera": "camera_4", "armed": True})),
+                    ("camera_4 disarmed", dict(body={"camera": "camera_4", "armed": False})),
+                    ("an unknown camera", dict(body={"camera": "camera_9", "armed": True})),
+                    ("a missing camera", dict(body={"armed": True})),
+                    ("a missing armed", dict(body={"camera": "camera_1"})),
+                    ("a third key", dict(body={"camera": "camera_1", "armed": True, "until": 99})),
+                    ("a string true", dict(body={"camera": "camera_1", "armed": "true"})),
+                    ("a numeric 1", dict(body={"camera": "camera_1", "armed": 1})),
+                    ("an unknown mode", dict(body={"mode": "night"})),
+                    ("a numeric mode", dict(body={"mode": 1})),
+                    ("both shapes at once", dict(body={"mode": "home", "camera": "camera_1",
+                                                       "armed": True})),
+                    ("a mode and a camera", dict(body={"mode": "away", "camera": "camera_1"})),
+                    ("neither shape", dict(body={})),
+                    ("a list", dict(body=["camera_1", True])),
+                    ("a string", dict(body="camera_1")),
+                    ("null", dict(raw=b"null")),
+                    ("an oversized body", dict(body={"camera": "camera_1", "armed": True,
+                                                     "pad": "x" * (retain.MAX_BODY_BYTES + 1)})),
+                )
+                for name, kwargs in bodies:
+                    status, _headers, body = call(port, "POST", retain.ENTRY_PATH,
+                                                  action=retain.ENTRY_ACTION_VALUE, **kwargs)
+                    assert status in (400, 413), \
+                        f"a body naming {name} answered HTTP {status}: {body!r}"
+                    state = entry_state(port)
+                    assert state["mode"] == "home", f"a body naming {name} armed something"
+                    assert state["state"][retain.ALWAYS_CAMERA]["armed"] is True, \
+                        f"a body naming {name} reached camera_4"
+                assert not path.exists(), f"a refused body wrote {path.read_text()}"
+                print(f"ok  {len(bodies)} bodies refused with HTTP 400 or 413 — camera_4 armed and "
+                      "disarmed, an unknown camera, a missing key, a third key, a string or numeric "
+                      "armed, an unknown or numeric mode, both shapes at once, neither shape, four "
+                      "wrong JSON types and an oversized body — each before anything could be armed")
 
-            # Not ready means refused to arm, but never refused to disarm.
-            fake.config = False
-            fake.events.append(retain_event("newc01", "camera_1", int(time.time()) - 1,
-                                            zones=["camera_1_restricted"]))
-            status, _headers, body = arm(port, "camera_1", True)
-            assert status == 409, f"arming a camera with no readable config answered {status}: {body!r}"
-            assert not entry_state(port)["state"]["camera_1"]["armed"], \
-                "a refused arming still armed the camera"
-            status, _headers, body = arm(port, "camera_1", False)
-            assert status == 200, \
-                f"disarming with no readable config answered {status}: {body!r}"
-            assert json.loads(body)["state"]["camera_1"]["armed"] is False, \
-                "a disarm did not clear the state while the config was unreadable"
-            print("ok  with Frigate's config unreadable the camera reads not ready and arming is "
-                  "refused, while disarming still works, so a camera that stopped being ready "
-                  "can never be stuck armed")
+                # The one preset that works with nothing configured, and the one camera that
+                # can be armed, so what follows is measured against a state that moved.
+                status, _headers, body = preset(port, "away")
+                assert status == 200, f"Away answered HTTP {status}: {body!r}"
+                payload = entry_state(port)
+                assert payload["mode"] == "away", f"Away answered {payload['mode']!r}"
+                assert all(payload["state"][camera]["armed"] for camera in retain.ENTRY_CAMERAS), \
+                    f"Away left a camera off: {payload['state']}"
+                print("ok  the Away preset arms all three cameras in one request, and the reply "
+                      "reports away")
 
-            text = leaks(output)
-            assert "CREDENTIAL-MARKER" not in text and CREDENTIAL_MARKER not in text, \
-                "the config's RTSP credential reached the gateway's output"
-            assert "rtsp://" not in text, f"an RTSP URL reached the output:\n{text}"
-    return fake
+
+def check_entry_presets_and_toggles():
+    """One moment for the whole preset, individual toggles that override it, and Home."""
+    armed_at = int(time.time()) - 30
+    fake = FakeFrigate(console_fixture())
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "entry.json"
+        with serving(fake) as base:
+            with gateway(base, state_file=path) as (port, output):
+                status, _headers, body = preset(port, "away")
+                assert status == 200, f"Away answered HTTP {status}: {body!r}"
+                away = entry_state(port)["state"]
+                moments = {away[camera]["armed_since"] for camera in retain.ENTRY_CAMERAS}
+                assert len(moments) == 1 and moments.pop() >= armed_at, \
+                    f"Away did not arm all three at one moment: {away}"
+                # Repeating it is idempotent, and it must not move the moment.
+                first_moment = next(iter(away.values()))["armed_since"]
+                assert preset(port, "away")[0] == 200
+                again = entry_state(port)["state"]
+                assert all(again[camera]["armed_since"] == first_moment
+                           for camera in retain.ENTRY_CAMERAS), \
+                    f"a repeated Away moved the arming moment: {again}"
+                # One camera off makes the mode Custom, and leaves the other two alone.
+                status, _headers, body = arm(port, "camera_3", False)
+                assert status == 200, f"disarming camera_3 answered HTTP {status}: {body!r}"
+                custom = entry_state(port)
+                assert custom["mode"] == "custom", f"a mixed answer called {custom['mode']!r}"
+                assert custom["state"]["camera_1"] == away["camera_1"], \
+                    f"disarming one camera changed another: {custom['state']}"
+                assert custom["state"]["camera_3"] == {"armed": False, "ready": True,
+                                                       "armed_since": None}, \
+                    f"camera_3 after a disarm: {custom['state']['camera_3']}"
+                # And one camera on from Home is a single arming, with its own moment.
+                assert preset(port, "home")[0] == 200
+                home = entry_state(port)
+                assert home["mode"] == "home", f"Home answered {home['mode']!r}"
+                assert all(home["state"][camera]["armed_since"] is None
+                           for camera in retain.ENTRY_CAMERAS), \
+                    f"Home left a moment behind: {home['state']}"
+                assert arm(port, "camera_2", True)[0] == 200
+                one = entry_state(port)
+                assert one["mode"] == "custom" and one["state"]["camera_2"]["armed_since"], \
+                    f"one arming did not read as custom: {one}"
+                assert home["state"][retain.ALWAYS_CAMERA]["armed_since"] is None, \
+                    "camera_4 grew an arming moment"
+                assert fake.deletes == [], f"an arming write deleted {fake.deletes}"
+                saved = json.loads(path.read_text())
+                assert set(saved["cameras"]) == set(retain.ENTRY_CAMERAS), \
+                    f"the saved file names {sorted(saved['cameras'])}"
+                assert saved["cameras"]["camera_2"]["armed"] is True and \
+                    saved["cameras"]["camera_1"]["armed"] is False, \
+                    f"the saved file is {saved['cameras']}"
+    print("ok  Away arms all three at one moment and a repeat keeps that moment; a single camera "
+          "off or on makes the mode Custom and leaves the others alone; Home clears all three; "
+          "camera_4 never grows an arming moment; the file on disk holds the three flags")
+
+
+def check_entry_state_file():
+    """The saved arming across a real restart, a file that cannot be read, and a save that
+    cannot land."""
+    fake = FakeFrigate(console_fixture())
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "entry.json"
+        with serving(fake) as base:
+            with gateway(base, state_file=path) as (port, _first):
+                assert preset(port, "away")[0] == 200
+                before = entry_state(port)["state"]
+            # A second process, same file: this is what a restart of the service is.
+            with gateway(base, state_file=path) as (port, _second):
+                after = entry_state(port)["state"]
+                assert after == before, f"a restart came back {after}, not {before}"
+                assert entry_state(port)["mode"] == "away", "a restart did not come back Away"
+                print("ok  Away, saved in a real file, is still Away with the same arming moments "
+                      "after the worker process is replaced")
+
+            # A save that cannot land, with that valid Away file behind it: the previous
+            # valid file must come out whole and the process must still report Away. The
+            # scratch the write needs is turned into a directory, so the failure is the real
+            # filesystem refusing the write rather than anything simulated.
+            with gateway(base, state_file=path) as (port, output):
+                saved_bytes = path.read_bytes()
+                blocked = path.with_name(path.name + ".new")
+                blocked.mkdir()
+                status, _headers, body = preset(port, "home")
+                assert status == 503, f"a save that could not land answered {status}: {body!r}"
+                assert b"/" not in body, f"the refusal carried a path: {body!r}"
+                assert path.read_bytes() == saved_bytes, "a failed save changed the saved file"
+                stuck = entry_state(port)
+                assert stuck["mode"] == "away" and stuck["state"] == before, \
+                    f"a failed save changed what the process reports: {stuck['state']}"
+                assert preset(port, "home")[0] == 503, "a second failed save reported success"
+                assert path.read_bytes() == saved_bytes, "a failed save changed the saved file"
+                text = leaks(output)
+                assert "could not be saved" in text, f"the failure was not logged:\n{text}"
+                # Clear the obstacle and the very same request lands.
+                blocked.rmdir()
+                assert preset(port, "home")[0] == 200, "Home did not save once the write could"
+                assert entry_state(port)["mode"] == "home", "Home did not take after saving"
+                assert json.loads(path.read_text())["cameras"]["camera_1"]["armed"] is False, \
+                    "the saved file does not say Home"
+                assert not blocked.exists(), "the scratch was left behind after a good save"
+            print("ok  with the write blocked by a real filesystem refusal, Home is answered 503, "
+                  "the valid Away file comes out byte for byte unchanged, the process still "
+                  "reports Away with the same moments, and the same request saves as soon as the "
+                  "obstacle is gone")
+
+            # A file this cannot read is Home, and camera_4 is armed through it.
+            broken = '{"version": 1, "cameras": {"camera_1": {"armed": tr'
+            path.write_text(broken)
+            with gateway(base, state_file=path) as (port, _third):
+                payload = entry_state(port)
+                assert payload["mode"] == "home", \
+                    f"a file that cannot be read came back {payload['mode']!r}"
+                assert retain.STATE_UNREADABLE in payload["notice"], \
+                    f"the dashboard was not told: {payload['notice']!r}"
+                assert payload["state"][retain.ALWAYS_CAMERA] == {"armed": True, "ready": True,
+                                                                  "armed_since": None}, \
+                    f"camera_4 followed an unreadable file: {payload['state']}"
+                assert path.read_text() == broken, "reading the status rewrote the file"
+
+            # camera_4 written into the file, in every shape that could mean anything, and
+            # nothing it says is honoured.
+            for label, text in (
+                ("an explicit off", '{"version": 1, "cameras": {"camera_1": {"armed": false, '
+                                    '"armed_since": null}, "camera_2": {"armed": true, '
+                                    '"armed_since": 1790910000.0}, "camera_3": {"armed": false, '
+                                    '"armed_since": null}, "camera_4": {"armed": false, '
+                                    '"armed_since": null}}}'),
+                ("an explicit off with no moment", '{"version": 1, "cameras": {"camera_1": '
+                                                   '{"armed": false, "armed_since": null}, '
+                                                   '"camera_2": {"armed": false, '
+                                                   '"armed_since": null}, "camera_3": '
+                                                   '{"armed": false, "armed_since": null}, '
+                                                   '"camera_4": {"armed": 0, '
+                                                   '"armed_since": 1790910000.0}}}'),
+            ):
+                path.write_text(text)
+                with gateway(base, state_file=path) as (port, _fourth):
+                    payload = entry_state(port)
+                    assert payload["state"][retain.ALWAYS_CAMERA] == {"armed": True, "ready": True,
+                                                                      "armed_since": None}, \
+                        f"a file with camera_4 {label} turned it off: {payload['state']}"
+                    assert payload["mode"] == "home", \
+                        f"a file naming a fourth camera was honoured: {payload['mode']!r}"
+            print("ok  a file naming camera_4 in any shape is not honoured: camera_4 is armed with "
+                  "no moment of its own through both, and a file with a fourth camera in it is "
+                  "not read at all")
+    assert fake.deletes == [], f"the arming checks deleted {fake.deletes}"
+
+
+def check_entry_ready_gating():
+    """An area the camera service does not report refuses arming and stops the pins, keeps
+    every setting, and recovers by itself; Home never needs it."""
+    fake = FakeFrigate(console_fixture())
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "entry.json"
+        with serving(fake) as base:
+            with gateway(base, state_file=path) as (port, _output):
+                assert preset(port, "away")[0] == 200
+                armed = entry_state(port)["state"]
+                # The route itself is failing. A read is answered from the cached verdict,
+                # so the arming POST is what forces the fresh read that finds it.
+                fake.config = "error"
+                for camera in retain.ENTRY_CAMERAS:
+                    status, _headers, body = arm(port, camera, True)
+                    assert status == 409, \
+                        f"arming {camera} with no readable config answered {status}: {body!r}"
+                assert preset(port, "away")[0] == 409, "Away was accepted with no readable config"
+                blind = entry_state(port)
+                assert all(not row["ready"] for row in blind["state"].values()), \
+                    f"a config that cannot be read still reported ready: {blind['state']}"
+                assert blind["mode"] == "away", \
+                    f"a config that cannot be read changed the mode: {blind['mode']!r}"
+                for camera in retain.CAMERAS:
+                    assert blind["state"][camera] == {"armed": armed[camera]["armed"], "ready": False,
+                                                     "armed_since": armed[camera]["armed_since"]}, \
+                        f"a failed config read changed more than the readiness on {camera}: " \
+                        f"{blind['state'][camera]}"
+                assert arm(port, "camera_1", False)[0] == 200, \
+                    "disarming must work even when nothing can be pinned"
+                # Home is always available: it keeps nothing, so it needs no area.
+                assert preset(port, "home")[0] == 200, "Home was refused with no readable config"
+                assert entry_state(port)["mode"] == "home", "Home did not take"
+
+                # A config that reads fine but reports no area for camera_2 gates only that one.
+                fake.config = "no-camera-2"
+                assert arm(port, "camera_2", True)[0] == 409, \
+                    "arming camera_2 with no area configured was accepted"
+                assert arm(port, "camera_1", True)[0] == 200, \
+                    "arming camera_1 was refused for camera_2's missing area"
+                assert preset(port, "away")[0] == 409, "Away was accepted with one area missing"
+                assert entry_state(port)["mode"] == "custom", \
+                    "Away failed without arming every camera"
+                assert entry_state(port)["state"]["camera_2"]["armed"] is False, \
+                    "a refused arming still armed camera_2"
+                # And the config comes back by itself.
+                fake.config = "ok"
+                assert preset(port, "away")[0] == 200, "Away was refused after the areas returned"
+                recovered = entry_state(port)
+                assert all(row["ready"] for row in recovered["state"].values()), \
+                    f"the areas did not recover: {recovered['state']}"
+                assert recovered["mode"] == "away", "Away did not take after recovery"
+                print("ok  with nothing readable every arming and Away is refused with 409, the "
+                      "settings and the mode survive untouched, disarming and Home still work, and "
+                      "one missing area gates only its own camera — then Away works by itself once "
+                      "the areas are reported again")
 
 
 def check_entry_status_hides_the_config():
-    """The config carries RTSP credentials, so the status must carry none of it."""
+    """The config carries RTSP credentials and the state file a path, so the status must
+    carry none of it."""
     fake = FakeFrigate(console_fixture())
-    with serving(fake) as base:
-        with gateway(base) as (port, output):
-            payload = entry_state(port)
-            blob = json.dumps(payload)
-            for leak in ("CREDENTIAL-MARKER", "rtsp://", "camera_9_area", "ffmpeg", "detect",
-                         "192.0.2.10", "password", "track"):
-                assert leak not in blob, f"{leak!r} reached the entry status: {blob}"
-            assert payload["notice"] and isinstance(payload["notice"], str), "no restart notice"
-            assert json.dumps(payload) == blob, "the status shape is not stable"
-            # A refusal carries no config either.
-            status, _headers, body = arm(port, "camera_2", True)
-            assert status == 400, f"a refused arming answered HTTP {status}: {body!r}"
-            for leak in ("CREDENTIAL-MARKER", "rtsp://"):
-                assert leak not in body.decode(), f"{leak!r} reached a refusal: {body!r}"
-            leaks(output)
-            print("ok  the entry status and its refusals carry two booleans and one number per "
-                  "camera and nothing from Frigate's config, which is where the RTSP credentials "
-                  "live")
+    with tempfile.TemporaryDirectory() as folder:
+        with serving(fake) as base:
+            with gateway(base, state_file=Path(folder) / "entry.json") as (port, output):
+                payload = entry_state(port)
+                blob = json.dumps(payload)
+                for leak in ("CREDENTIAL-MARKER", "rtsp://", "camera_9_area", "ffmpeg", "detect",
+                             "192.0.2.10", "password", "track", "entry.json", "/state", "Traceback"):
+                    assert leak not in blob, f"{leak!r} reached the entry status: {blob}"
+                assert payload["notice"] and isinstance(payload["notice"], str), "no notice"
+                assert json.dumps(payload) == blob, "the status shape is not stable"
+                # A refusal carries no config and no path either.
+                status, _headers, body = arm(port, "camera_4", False)
+                assert status == 400, f"a refused arming answered HTTP {status}: {body!r}"
+                for leak in ("CREDENTIAL-MARKER", "rtsp://", "entry.json"):
+                    assert leak not in body.decode(), f"{leak!r} reached a refusal: {body!r}"
+                leaks(output)
+    print("ok  the entry status and its refusals carry four booleans and one number per camera, "
+          "the mode and the always-armed camera, and nothing from the camera service's config or "
+          "the state file's path")
 
 
 def check_entry_and_deletion_are_independent():
@@ -926,30 +1177,58 @@ def check_entry_and_deletion_are_independent():
     move when the retention policy does.
     """
     fake = FakeFrigate(console_fixture())
-    with serving(fake) as base:
-        with gateway(base) as (port, output):
-            eligible = len(eligible_ids(fake))
-            summary = reply(port)
-            assert summary["count"] == eligible, \
-                f"the archive counted {summary['count']} of {eligible} while disarmed"
-            status, _headers, body = arm(port, "camera_1", True)
-            assert status == 200, f"arming answered HTTP {status}: {body!r}"
-            assert reply(port)["count"] == eligible, "arming changed what the archive reaches"
-            target = [event_id for event_id, tag in
-                      ((row["id"], row["id"].rsplit("-", 1)[-1]) for row in fake.events)
-                      if tag.startswith("a000")]
-            status, _headers, body = call(port, "POST", retain.DELETE_PATH,
-                                          body={"ids": sorted(target)},
-                                          action=retain.ACTION_VALUE)
-            assert status == 200, f"a named delete answered HTTP {status}: {body!r}"
-            result = json.loads(body)
-            assert result["deleted"] == len(target), f"deleted {result} for {len(target)} ids"
-            assert result["failed"] == [], f"an armed camera refused a deletable row: {result}"
-            assert fake.deletes == sorted(target), f"upstream saw {fake.deletes}"
-            print(f"ok  the archive scope is identical disarmed and armed ({eligible} rows), and "
-                  f"{len(target)} of them still delete by name afterwards, so what an operator "
-                  f"may reach does not move with the retention policy")
-            leaks(output)
+    with tempfile.TemporaryDirectory() as folder:
+        with serving(fake) as base:
+            with gateway(base, state_file=Path(folder) / "entry.json") as (port, output):
+                eligible = len(eligible_ids(fake))
+                summary = reply(port)
+                assert summary["count"] == eligible, \
+                    f"the archive counted {summary['count']} of {eligible} while Home"
+                status, _headers, body = arm(port, "camera_1", True)
+                assert status == 200, f"arming answered HTTP {status}: {body!r}"
+                assert reply(port)["count"] == eligible, "arming changed what the archive reaches"
+                target = [event_id for event_id, tag in
+                          ((row["id"], row["id"].rsplit("-", 1)[-1]) for row in fake.events)
+                          if tag.startswith("a000")]
+                status, _headers, body = call(port, "POST", retain.DELETE_PATH,
+                                              body={"ids": sorted(target)},
+                                              action=retain.ACTION_VALUE)
+                assert status == 200, f"a named delete answered HTTP {status}: {body!r}"
+                result = json.loads(body)
+                assert result["deleted"] == len(target), f"deleted {result} for {len(target)} ids"
+                assert result["failed"] == [], f"an armed camera refused a deletable row: {result}"
+                assert fake.deletes == sorted(target), f"upstream saw {fake.deletes}"
+                print(f"ok  the archive scope is identical at Home and armed ({eligible} rows), and "
+                      f"{len(target)} of them still delete by name afterwards, so what an operator "
+                      f"may reach does not move with the retention policy")
+                leaks(output)
+
+
+def check_entry_confirmation_markup():
+    """The confirmation in the served markup: one native dialog in the classes the
+    deletion already uses, Cancel as a submit carrying the default focus, and no control
+    for the always-armed camera.
+
+    What the dialog *decides* and *sends* is owned by scripts/check_entry_ui.mjs, which
+    runs the page's own functions; only the markup belongs here.
+    """
+    root = HERE.parent / "dashboard"
+    html = (root / "index.html").read_text()
+    app = (root / "app.js").read_text()
+    assert html.count('class="confirm"\n      id="entry-confirm"') == 1, \
+        "the entry confirmation is not one native <dialog> in the confirm classes"
+    assert html.count('<form method="dialog" class="confirm__form">') == 2, \
+        "the entry confirmation is not built on a method=dialog form like the delete one"
+    assert html.count('type="submit" id="entry-cancel" autofocus>Cancel</button>') == 1, \
+        "Cancel is not a submit carrying autofocus, so it is not the default focus"
+    assert html.count('id="entry-confirm-button"') == 1, "there is not exactly one Confirm"
+    for element in ("entry-confirm", "entry-confirm-title", "entry-confirm-scope",
+                    "entry-cancel", "entry-confirm-button", "entry-confirm-label"):
+        assert f'$("{element}")' in app, f"the page never reads {element}"
+    assert 'data-entry-action="camera_4"' not in html, "camera_4 grew a control"
+    assert 'data-entry-preset="camera_4"' not in html, "camera_4 grew a preset"
+    print("ok  one native <dialog> in the existing confirm classes, Cancel focused first, one "
+          "Confirm, every id the page reads present, and no control for the always-armed camera")
 
 
 def main():
@@ -958,7 +1237,10 @@ def main():
     for check in (check_guards, check_bodies, check_summary, check_events_pages,
                   check_events_camera_filter, check_events_query_refusals,
                   check_selected_delete, check_partial_failures, check_archive_delete,
-                  check_page_cap_fails_closed, check_entry_arming,
+                  check_page_cap_fails_closed, check_entry_reads_home_and_camera_4_is_always,
+                  check_entry_write_refusals, check_entry_presets_and_toggles,
+                  check_entry_state_file, check_entry_ready_gating,
+                  check_entry_confirmation_markup,
                   check_entry_status_hides_the_config,
                   check_entry_and_deletion_are_independent, check_poll_never_deletes):
         check()

@@ -62,13 +62,24 @@
     camera_4: "camera_4_area",
   });
 
-  /* The restricted area, on the two cameras a person may arm by hand. Like the
-   * area zone its internal name never reaches the page: a row reads "Restricted
-   * area entry", which says a person crossed into that area and nothing at all
-   * about why, from where, or who. camera_2 and camera_3 are not in this map
-   * because they have no restricted area and never will. */
+  /* The restricted area, on the two cameras that have one. Like the area zone its
+   * internal name never reaches the page: a row reads "Restricted area entry", which
+   * says a person crossed into that area and nothing at all about why, from where, or
+   * who. camera_2 and camera_3 are not in this map because they have no restricted
+   * area and never will. */
   const RESTRICTED_ZONE = Object.freeze({
     camera_1: "camera_1_restricted",
+    camera_4: "camera_4_restricted",
+  });
+
+  /* The area a camera's people are judged in, which is what the worker maps for it:
+   * the restricted polygon on camera_1 and camera_4, and the whole-frame monitored area
+   * on camera_2 and camera_3. A kept person row carries one of these, whatever it means
+   * for that camera, so "Kept for review" is not reserved for an entry. */
+  const WATCHED_ZONE = Object.freeze({
+    camera_1: "camera_1_restricted",
+    camera_2: "camera_2_area",
+    camera_3: "camera_3_area",
     camera_4: "camera_4_restricted",
   });
 
@@ -95,16 +106,28 @@
   const SUMMARY_PATH = "/api/snapshots/summary";
   const DELETE_PATH = "/api/snapshots/delete";
 
-  /* Entry arming: the two cameras a person may switch on by hand, and the one
-   * exact path that reads and writes it. Both a read and a write, and neither
-   * touches a camera, a zone or a configuration — the worker holds the flag in
-   * memory and forgets it on restart, which the status line says out loud. */
-  const ENTRY_CAMERAS = Object.freeze(["camera_1", "camera_4"]);
+  /* Entry monitoring: the three cameras a person may arm by hand, and the one that is
+   * always armed and has no control at all. Both bodies below are the same fixed path
+   * the worker validates: {"mode":"home"|"away"} for the two presets, and
+   * {"camera":"camera_1"|"camera_2"|"camera_3","armed":bool} for one camera. Neither
+   * touches a camera, a zone or a configuration — the worker saves the setting in one
+   * file and the status line says out loud that Camera 4 cannot be turned off. */
+  const ENTRY_CAMERAS = Object.freeze(["camera_1", "camera_2", "camera_3"]);
+  const ALWAYS_CAMERA = "camera_4";
+  /* What each camera's area is, in words. Camera 1 has a drawn boundary to cross; the
+   * other two are internal views whose area is the whole frame, so arming one of
+   * them keeps anyone in view rather than an entry. */
+  const ENTRY_PLACE = Object.freeze({
+    camera_1: "monitored area 1",
+    camera_2: "monitored area 2",
+    camera_3: "area_3",
+    camera_4: "area_4",
+  });
   const ENTRY_PATH = "/api/security/entry";
   const ENTRY_ACTION = "arm-entry";
 
   /* Arming is the one write here whose outcome can be genuinely unknown: a POST
-   * that times out may or may not have been applied. So it gets a longer window
+   * that times out may or may not have been saved. So it gets a longer window
    * than a live read, and its failure path is always a fresh read of the server's
    * own state rather than a guess at what happened. */
   const ENTRY_TIMEOUT_MS = 15000;
@@ -193,6 +216,13 @@
     statAge: $("stat-age"),
     entry: $("entry-controls"),
     entryResult: $("entry-result"),
+    entryNotice: $("entry-notice"),
+    entryConfirm: $("entry-confirm"),
+    entryConfirmTitle: $("entry-confirm-title"),
+    entryConfirmScope: $("entry-confirm-scope"),
+    entryConfirmCancel: $("entry-cancel"),
+    entryConfirmButton: $("entry-confirm-button"),
+    entryConfirmLabel: $("entry-confirm-label"),
     eventTemplate: $("event-item"),
   };
 
@@ -214,15 +244,16 @@
     statsError: null,
     eventsError: null,
     deleting: false, // a confirmed delete is in flight; no second one can start
-    // Entry arming, read from the worker and never assumed: no optimistic state,
+    // Entry monitoring, read from the worker and never assumed: no optimistic state,
     // so a refused POST and a failed read both leave the page showing the last
     // answer the server actually gave.
     entry: {
       read: false,
       error: null,
-      busy: null, // the camera whose POST is in flight, or null
+      busy: null, // the camera or preset whose POST is in flight, or null
       epoch: 0, // moved by every write, so a read already in flight cannot land after it
       notice: "",
+      mode: "home", // home | away | custom, as the worker derived it
       state: {}, // camera -> {ready, armed, armedSince}
     },
   };
@@ -350,16 +381,31 @@
     );
   };
 
+  /* The wider version: a person in whatever area that camera watches, which is a
+   * restricted polygon on cameras 1 and 4 and the whole frame on cameras 2 and 3. The
+   * row says "Kept for review" from this one, so a person kept on a house camera reads
+   * as kept rather than as an old record. */
+  const inWatchedZone = (event) => {
+    const zone = WATCHED_ZONE[event.camera];
+    return (
+      zone !== undefined &&
+      event.label === PERSON_LABEL &&
+      Array.isArray(event.zones) &&
+      event.zones.includes(zone)
+    );
+  };
+
   /* Retention, stated from what this event carries and never assumed. An ordinary
    * row expires after the six hours the camera service keeps it. A row held
-   * because a person entered its own camera's armed restricted area is held for
-   * review. So is a row held because an animal was seen on a camera that watches
-   * for them. A person row that is held with neither is a record from before this
-   * rule, and says so rather than claiming it is a current risk: the word follows
-   * the flag the service actually reports, never the zone on its own. */
+   * because a person was inside that camera's watched area while its monitoring
+   * was armed is held for review. So is a row held because an animal was seen on
+   * a camera that watches for them. A person row that is held with neither is a
+   * record from before this rule, and says so rather than claiming it is a
+   * current risk: the word follows the flag the service actually reports, never
+   * the zone on its own. */
   function retentionText(event) {
     if (!isKept(event)) return "6-hour retention";
-    return inRestrictedZone(event) || isAnimal(event) ? "Kept for review" : "Previously kept";
+    return inWatchedZone(event) || isAnimal(event) ? "Kept for review" : "Previously kept";
   }
 
   /* A count the service reported, accepted only when it is already a whole
@@ -1376,20 +1422,24 @@
 
   /* -------------------------------------------------------------- entry -- */
 
-  /* What a status reply has to be before this page acts on one of its two
-   * booleans. Every field is checked, because a reply it cannot read is a status
-   * it does not have: shown as unavailable rather than filled in with a guess.
-   * armed and armed_since have to agree, so an "armed with no moment" or a
-   * "disarmed with one" shape is refused instead of half-believed. */
+  /* What a status reply has to be before this page acts on one of its booleans.
+   * Every field is checked, because a reply it cannot read is a status it does not
+   * have: shown as unavailable rather than filled in with a guess. armed and
+   * armed_since have to agree, so an "armed with no moment" or a "disarmed with one"
+   * shape is refused — except on the always-armed camera, which is exactly armed
+   * with no moment of its own. The mode has to agree with the three flags it is
+   * derived from, so a reply that contradicts itself is not half-believed either. */
   function usableEntry(payload) {
     if (!isObject(payload)) return null;
     if (!Array.isArray(payload.cameras)) return null;
-    for (const camera of ENTRY_CAMERAS) {
+    for (const camera of CAMERAS) {
       if (!payload.cameras.includes(camera)) return null;
     }
+    if (payload.always_armed !== ALWAYS_CAMERA) return null;
+    if (payload.mode !== "home" && payload.mode !== "away" && payload.mode !== "custom") return null;
     if (!isObject(payload.state)) return null;
     const state = {};
-    for (const camera of ENTRY_CAMERAS) {
+    for (const camera of CAMERAS) {
       const row = payload.state[camera];
       if (!isObject(row)) return null;
       const ready = row.ready;
@@ -1397,6 +1447,11 @@
       if (ready !== true && ready !== false) return null;
       if (armed !== true && armed !== false) return null;
       const since = row.armed_since;
+      if (camera === ALWAYS_CAMERA) {
+        if (armed !== true || since !== null) return null;
+        state[camera] = { ready: ready, armed: true, armedSince: null };
+        continue;
+      }
       if (armed) {
         if (numberOrNull(since) === null || since <= 0) return null;
       } else if (since !== null) {
@@ -1404,12 +1459,16 @@
       }
       state[camera] = { ready: ready, armed: armed, armedSince: since };
     }
-    return { state: state, notice: textOr(payload.notice, "") };
+    const armedCount = ENTRY_CAMERAS.filter((camera) => state[camera].armed).length;
+    const derived = armedCount === 0 ? "home" : armedCount === ENTRY_CAMERAS.length ? "away" : "custom";
+    if (derived !== payload.mode) return null;
+    return { state: state, notice: textOr(payload.notice, ""), mode: payload.mode };
   }
 
   function applyEntry(parsed) {
     state.entry.state = parsed.state;
     state.entry.notice = parsed.notice;
+    state.entry.mode = parsed.mode;
     state.entry.read = true;
     state.entry.error = null;
   }
@@ -1448,7 +1507,7 @@
     }
   }
 
-  async function postEntry(camera, armed) {
+  async function postEntry(body) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), ENTRY_TIMEOUT_MS);
     try {
@@ -1462,7 +1521,7 @@
           "Content-Type": "application/json",
           "X-Surveillance-Action": ENTRY_ACTION,
         },
-        body: JSON.stringify({ camera: camera, armed: armed }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
       if (!res.ok) throw new Error("HTTP " + res.status);
@@ -1474,31 +1533,43 @@
     }
   }
 
-  /* One arming write, and never sent twice: a POST whose answer is unknown is
-   * settled by reading the state back, not by asking again. The epoch moves at the
-   * start of the write, so every status read already in flight is discarded rather
-   * than allowed to land on top of the answer this is waiting for. */
-  async function onEntryAction(camera) {
-    /* Four things must already be true before a POST is built: the status has been
-     * read (read is the flag, so a page that has never had an answer cannot write
-     * from a guess), this camera's row is one the server actually described, that
-     * row says its restricted area is ready, and no other write is in flight. The
-     * button is disabled in every one of those states as well; this is the same
-     * refusal in the code path, not only in the rendering. */
+  /* One change, and never sent twice: a POST whose answer is unknown is settled by
+   * reading the state back, not by asking again. The epoch moves at the start of the
+   * write, so every status read already in flight is discarded rather than allowed to
+   * land on top of the answer this is waiting for. */
+  async function sendEntry(body) {
+    /* Five things must already be true before a POST is built: the status has been
+     * read (read is the flag, so a page that has never had an answer cannot write from
+     * a guess), this is not the always-armed camera, the change is one the server's own
+     * last answer supports, and no other write is in flight. The buttons are disabled
+     * in every one of those states as well; this is the same refusal in the code path,
+     * not only in the rendering. */
     if (!state.entry.read || state.entry.busy !== null) return;
-    const known = state.entry.state[camera];
-    if (!known || !known.ready) return;
-    const wanted = !known.armed;
+    if (body.camera === ALWAYS_CAMERA) return;
+    if (body.camera) {
+      const known = state.entry.state[body.camera];
+      if (!known) return;
+      // Only turning something on needs its area confirmed. Turning it off has to work
+      // without it, or a camera that stopped being confirmed could never be disarmed.
+      if (body.armed && !known.ready) return;
+      if (known.armed === body.armed) return;
+    } else if (body.mode === "away") {
+      // Away arms all three at once, so it needs all three areas confirmed; Home keeps
+      // no person snapshot and needs nothing.
+      if (!ENTRY_CAMERAS.every((camera) => state.entry.state[camera].ready)) return;
+    } else if (body.mode !== "home") {
+      return;
+    }
     state.entry.epoch += 1;
-    state.entry.busy = camera;
+    state.entry.busy = body.camera || body.mode;
     renderEntry();
     let failure = null;
     let applied = null;
     try {
-      applied = await postEntry(camera, wanted);
+      applied = await postEntry(body);
     } catch (err) {
       failure = describe(err);
-      // The write may or may not have landed. Only the service's own next answer
+      // The change may or may not have been saved. Only the service's own next answer
       // says which, so that is what this waits for. The controls stay shut for the
       // whole reconciliation: an uncertain answer must not be answered from here.
       const reread = await readEntry(true);
@@ -1506,27 +1577,39 @@
     }
     state.entry.busy = null;
     if (applied !== null) applyEntry(applied);
+    const said = entryOutcomeText(body);
     if (failure === null) {
-      showEntryOutcome(
-        "ok",
-        cameraLabel(camera) + " entry review is now " + (wanted ? "armed" : "disarmed") +
-          ". Snapshots already kept are untouched either way."
-      );
+      showEntryOutcome("ok", said + " Snapshots already kept are untouched.");
     } else if (applied !== null) {
       showEntryOutcome(
         "warn",
-        "The arming request did not finish (" + failure + "). The state beside the row " +
-          "was read back from the service, so it is what is actually in force."
+        "The request did not finish (" + failure + "). The state beside the rows was read " +
+          "back from the service, so it is what is actually in force."
       );
     } else {
       showEntryOutcome(
         "bad",
-        "The arming request did not finish (" + failure + ") and the status could not be " +
-          "read back either, so this page cannot say what is in force. Nothing is claimed " +
-          "here: check the service before relying on either state."
+        "The request did not finish (" + failure + ") and the status could not be read back " +
+          "either, so this page cannot say what is in force. Nothing is claimed here: check " +
+          "the service before relying on either state."
       );
     }
     renderEntry();
+  }
+
+  /* What the operator asked for, in words. Named before the request is sent and used
+   * only once the service has confirmed it, so it can never stand in for an answer.
+   * It says what is being kept — a person inside a watched area — and never anything
+   * about who, which way, or what it meant. */
+  function entryOutcomeText(body) {
+    if (!body.camera) {
+      return body.mode === "away"
+        ? "Person review armed on Cameras 1–3: Camera 1 its monitored area 1, Cameras 2 and 3 anyone in view."
+        : "Person review disarmed on Cameras 1–3.";
+    }
+    const what = body.camera === "camera_1" ? "its monitored area 1" : "anyone in view";
+    return cameraLabel(body.camera) +
+      (body.armed ? " armed · keeps " + what : " disarmed · keeps no person snapshot");
   }
 
   function showEntryOutcome(tone, text) {
@@ -1534,41 +1617,59 @@
     el.entryResult.textContent = text;
   }
 
-  /* Four states, and each one says what it is: not yet read, not available,
-   * the camera's restricted area is not configured in Frigate, or armed or
-   * disarmed with the moment it was armed. Nothing here is optimistic: the button
-   * offers the action the server's own last answer supports, and is disabled
-   * whenever that answer cannot say whether the camera is ready. */
+  /* Each row says what it is: not yet read, not available, its area not confirmed by the
+   * camera service, or armed or not with the moment it was armed. The always-armed
+   * camera is a line with no button, because there is no action to offer. Nothing here
+   * is optimistic: every button offers what the server's own last answer supports, and
+   * Disarm stays available on an armed camera whose area cannot be confirmed, because a
+   * camera that stopped reporting must never be stuck armed. */
   function renderEntry() {
-    for (const camera of ENTRY_CAMERAS) {
+    renderEntryMode();
+    for (const camera of CAMERAS) {
       const row = $("entry-" + camera);
       if (!row) continue;
       const known = state.entry.state[camera];
       const busy = state.entry.busy === camera;
       const blocked = state.entry.busy !== null;
+      const place = ENTRY_PLACE[camera];
       let tone = "pending";
-      let text = cameraLabel(camera) + " entry · reading status";
-      let action = "Arm entry review";
+      let text = cameraLabel(camera) + " · " + place + " · reading status";
+      let action = "Arm";
       let enabled = false;
       if (!known) {
         tone = state.entry.read ? "bad" : "pending";
-        text = cameraLabel(camera) + " entry · status unavailable";
-      } else if (!known.ready) {
-        tone = "warn";
-        text = cameraLabel(camera) + " entry · restricted area not configured";
-      } else if (known.armed) {
-        tone = "ok";
+        text = cameraLabel(camera) + " · " + place + " · status unavailable";
+      } else if (camera === ALWAYS_CAMERA) {
+        tone = known.ready ? "ok" : "warn";
         text =
-          cameraLabel(camera) + " entry · armed since " + clockTime(known.armedSince * 1000);
-        action = "Disarm entry review";
+          cameraLabel(camera) +
+          " · " +
+          place +
+          (known.ready ? " · always armed" : " · always armed, area not confirmed");
+      } else if (known.armed) {
+        tone = known.ready ? "ok" : "warn";
+        text =
+          cameraLabel(camera) +
+          " · " +
+          place +
+          (known.ready
+            ? " · armed since " + clockTime(known.armedSince * 1000)
+            : " · armed, area not confirmed");
+        action = "Disarm";
         enabled = true;
       } else {
-        text = cameraLabel(camera) + " entry · disarmed";
-        enabled = true;
+        tone = known.ready ? "pending" : "warn";
+        text =
+          cameraLabel(camera) +
+          " · " +
+          place +
+          (known.ready ? " · not armed" : " · not armed, area not confirmed");
+        enabled = known.ready;
       }
       setTick(row.querySelector(".tick"), tone);
       row.querySelector("[data-entry-state]").textContent = text;
       const button = row.querySelector("[data-entry-action]");
+      if (!button) continue;
       button.textContent = busy ? "Working…" : action;
       button.disabled = !enabled || blocked;
       // The state is the button's description, so its accessible name never
@@ -1577,11 +1678,159 @@
     }
   }
 
+  /* The mode line: the three flags added up, and how many of them are actually taking
+   * effect. Away with an area unconfirmed is not Away in force, and saying so here is
+   * what keeps an armed camera from reading as keeping snapshots. */
+  function renderEntryMode() {
+    const node = $("entry-state-mode");
+    const notice = $("entry-notice");
+    if (notice) notice.textContent = state.entry.notice;
+    if (!node) return;
+    const label = $("entry-mode");
+    if (label) setTick(label.querySelector(".tick"), modeTone());
+    if (!state.entry.read) {
+      node.textContent = state.entry.error
+        ? "Entry monitoring · status unavailable (" + state.entry.error.message + ")"
+        : "Entry monitoring · reading status";
+    } else {
+      const armed = ENTRY_CAMERAS.filter((camera) => state.entry.state[camera].armed);
+      const unconfirmed = armed.filter((camera) => !state.entry.state[camera].ready);
+      const mode = state.entry.mode.charAt(0).toUpperCase() + state.entry.mode.slice(1);
+      node.textContent =
+        "Entry monitoring · " + mode + " · " + armed.length + " of " + ENTRY_CAMERAS.length +
+        " armed" +
+        (unconfirmed.length ? " · " + unconfirmed.length + " area not confirmed" : "");
+    }
+    const blocked = state.entry.busy !== null;
+    // read is checked first: before the first answer there is no state to ask, and a
+    // status that never arrived must not be a crash on the first render.
+    const allReady =
+      state.entry.read && ENTRY_CAMERAS.every((camera) => state.entry.state[camera].ready);
+    const home = el.entry.querySelector('[data-entry-preset="home"]');
+    const away = el.entry.querySelector('[data-entry-preset="away"]');
+    if (home) {
+      home.textContent = state.entry.busy === "home" ? "Working…" : "Home";
+      home.disabled = !state.entry.read || blocked;
+    }
+    if (away) {
+      away.textContent = state.entry.busy === "away" ? "Working…" : "Away";
+      away.disabled = !state.entry.read || blocked || !allReady;
+    }
+  }
+
+  function modeTone() {
+    if (!state.entry.read) return state.entry.error ? "bad" : "pending";
+    const armed = ENTRY_CAMERAS.filter((camera) => state.entry.state[camera].armed);
+    if (armed.some((camera) => !state.entry.state[camera].ready)) return "warn";
+    return "ok";
+  }
+
   el.entry.addEventListener("click", (event) => {
+    const preset = event.target.closest("button[data-entry-preset]");
+    if (preset && el.entry.contains(preset)) {
+      askEntry({ mode: preset.dataset.entryPreset });
+      return;
+    }
     const button = event.target.closest("button[data-entry-action]");
     if (!button || !el.entry.contains(button)) return;
-    onEntryAction(button.dataset.entryAction);
+    const known = state.entry.state[button.dataset.entryAction];
+    if (!known) return;
+    askEntry({ camera: button.dataset.entryAction, armed: !known.armed });
   });
+
+  /* The one thing this page asks before it stops keeping people. Only an acknowledged
+   * Away asks, and only for a change that turns keeping people off: Home, or one camera
+   * that is armed right now being disarmed. Arming a camera, a repeat of the mode
+   * already in force, and a camera that is not armed all go straight out. The mode and
+   * the flags read here are the acknowledged ones from the server, never a guess. */
+  function entryNeedsConfirmation(body) {
+    if (!state.entry.read || state.entry.busy !== null) return false;
+    if (state.entry.mode !== "away") return false;
+    if (!body.camera) return body.mode === "home";
+    const known = state.entry.state[body.camera];
+    return Boolean(known && known.armed && body.armed === false);
+  }
+
+  /* What the confirmation would send, captured whole when it opens: a poll, a filter
+   * change or another click while the dialog is open cannot change it. */
+  let entryIntent = null;
+
+  function openEntryConfirm(body) {
+    // Never stacked on an open one, and never re-entered from its own Confirm.
+    if (entryIntent !== null || el.entryConfirm.open) return false;
+    entryIntent = body;
+    const whole = !body.camera;
+    el.entryConfirmTitle.textContent = whole
+      ? "Switch to Home?"
+      : "Disarm " + cameraLabel(body.camera) + "?";
+    el.entryConfirmScope.textContent = whole
+      ? "Away is active. Home stops person review on Cameras 1–3. Camera 4 remains armed."
+      : "Away is active. Disarming " +
+        cameraLabel(body.camera) +
+        " (" +
+        ENTRY_PLACE[body.camera] +
+        ") reduces person monitoring on Cameras 1–3 and the mode becomes Custom. " +
+        "Camera 4 remains armed.";
+    el.entryConfirmLabel.textContent = whole ? "Switch to Home" : "Disarm";
+    el.entryConfirmButton.disabled = false;
+    el.entryConfirmCancel.disabled = false;
+    el.entryConfirm.showModal();
+    lockScroll();
+    // Cancel is the default focus, and it is one of only two ways out besides Confirm:
+    // Escape and Cancel both close this dialog through the form, which sends no request
+    // and leaves every setting exactly as the server last reported it.
+    el.entryConfirmCancel.focus();
+    return true;
+  }
+
+  /* The refusals the disabled buttons already express, in the code path: nothing is
+   * built from a body this page does not recognise, from a status it has not read, or
+   * while another change is in flight. */
+  function askEntry(body) {
+    if (!state.entry.read || state.entry.busy !== null) return;
+    if (body.camera === ALWAYS_CAMERA) return;
+    if (body.camera) {
+      if (!ENTRY_CAMERAS.includes(body.camera)) return;
+      if (body.armed !== true && body.armed !== false) return;
+      const known = state.entry.state[body.camera];
+      if (!known || known.armed === body.armed) return;
+      // Only turning something on needs its area confirmed. Turning it off has to work
+      // without it, or a camera that stopped being confirmed could never be disarmed.
+      if (body.armed && !known.ready) return;
+    } else if (body.mode === "away") {
+      // Away arms all three at once, so it needs all three areas confirmed; Home keeps
+      // no person snapshot and needs nothing.
+      if (!ENTRY_CAMERAS.every((camera) => state.entry.state[camera].ready)) return;
+    } else if (body.mode !== "home") {
+      return;
+    }
+    if (entryNeedsConfirmation(body)) {
+      openEntryConfirm(body);
+      return;
+    }
+    sendEntry(body);
+  }
+
+  /* Confirm sends the captured body through the guarded path — never back through
+   * askEntry, so a confirmed change cannot open another confirmation — and never
+   * twice: the intent is dropped before the request is made. */
+  function confirmEntry() {
+    const body = entryIntent;
+    if (body === null) return;
+    entryIntent = null;
+    el.entryConfirm.close();
+    sendEntry(body);
+  }
+
+  /* Cancel, Escape and Confirm all land here, so a closed dialog never leaves an
+   * intent behind for the next click to pick up. */
+  function closeEntryConfirm() {
+    entryIntent = null;
+    releaseScroll();
+  }
+
+  el.entryConfirmButton.addEventListener("click", confirmEntry);
+  el.entryConfirm.addEventListener("close", closeEntryConfirm);
 
   /* ------------------------------------------------------------- deletes -- */
 

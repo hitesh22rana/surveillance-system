@@ -39,22 +39,26 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # Retention worker. Pins the person events that entered a camera's own armed
-  # restricted area (cameras 1 and 4 only, armed by hand from the dashboard) and any
-  # animal seen on sight, so Frigate's snapshot pruning cannot take them first. It
+  # Retention worker. Pins the person events that came inside a camera's own watched
+  # area — camera_4 always, cameras 1-3 while a person has armed them from the dashboard —
+  # and any animal seen on sight, so Frigate's snapshot pruning cannot take them first. It
   # also serves the dashboard's two controlled writes: reviewed manual deletion and
-  # entry arming. Standard library only, so the image is the bare interpreter:
-  # nothing to install, nothing to audit.
+  # entry review. Standard library only, so the image is the bare interpreter: nothing to
+  # install, nothing to audit.
   retention:
     image: python:3.13-alpine
     restart: unless-stopped
     depends_on:
       - frigate
-    # The worker is one read-only file. It writes nothing and needs nothing but
-    # the internal API, which is a literal default rather than an injected value.
+    # The worker is one read-only file. Its root filesystem stays read-only, and the one
+    # thing it writes is the operator's arming, in the named volume below.
     read_only: true
     volumes:
       - ./scripts/retain.py:/app/retain.py:ro
+      # The only writable path in the container: entry.json holds three arming flags and
+      # three timestamps, so a restart comes back as the operator left it. A named volume
+      # rather than a bind mount, so no host path is written into this project.
+      - retention-state:/state
     # The interpreter has nothing to put in /tmp, so this tmpfs stays empty. It is
     # here because read_only turns any stray write into a crash, and a worker that
     # crash-loops behind a read-only filesystem retains nothing at all.
@@ -72,3 +76,7 @@ services:
     # ever hold a .env value, and nothing here may ever publish a port.
     security_opt:
       - no-new-privileges:true
+
+volumes:
+  # The retention worker's arming, nothing else.
+  retention-state:

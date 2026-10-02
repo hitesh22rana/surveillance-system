@@ -288,17 +288,46 @@
           <div>
             <h2 class="section__title" id="entry-heading">Entry monitoring</h2>
             <p class="section__lede">
-              A new person entering the monitored area 1 on Camera 1, or the area_4 on
-              Camera 4, is kept for review while you have that camera armed.
+              A person inside a camera&rsquo;s watched area is kept for you to look at.
+              Camera 4 always watches its area_4 area. Cameras 1, 2 and 3 are yours to
+              arm: Camera 1&rsquo;s monitored area 1, and the monitored area 2 on Camera 2 and the
+              area_3 on Camera 3 in full view.
             </p>
           </div>
         </div>
 
         <div id="entry-controls">
+          <div class="toolbar">
+            <span class="feed__status" id="entry-mode">
+              <span class="tick" data-tone="pending" aria-hidden="true"></span>
+              <span class="entry__mode" data-entry-state id="entry-state-mode"
+                >Reading entry monitoring status</span
+              >
+            </span>
+            <button
+              class="btn btn--quiet"
+              type="button"
+              data-entry-preset="home"
+              aria-describedby="entry-state-mode"
+              disabled
+            >
+              Home
+            </button>
+            <button
+              class="btn btn--quiet"
+              type="button"
+              data-entry-preset="away"
+              aria-describedby="entry-state-mode"
+              disabled
+            >
+              Away
+            </button>
+          </div>
+
           <div class="toolbar" id="entry-camera_1">
             <span class="feed__status">
               <span class="tick" data-tone="pending" aria-hidden="true"></span>
-              <span data-entry-state id="entry-state-camera_1">Camera 1 entry &middot; reading status</span>
+              <span data-entry-state id="entry-state-camera_1">Camera 1 &middot; monitored area 1 &middot; reading status</span>
             </span>
             <button
               class="btn btn--quiet"
@@ -307,24 +336,47 @@
               aria-describedby="entry-state-camera_1"
               disabled
             >
-              Arm entry review
+              Arm
+            </button>
+          </div>
+
+          <div class="toolbar" id="entry-camera_2">
+            <span class="feed__status">
+              <span class="tick" data-tone="pending" aria-hidden="true"></span>
+              <span data-entry-state id="entry-state-camera_2">Camera 2 &middot; monitored area 2 &middot; reading status</span>
+            </span>
+            <button
+              class="btn btn--quiet"
+              type="button"
+              data-entry-action="camera_2"
+              aria-describedby="entry-state-camera_2"
+              disabled
+            >
+              Arm
+            </button>
+          </div>
+
+          <div class="toolbar" id="entry-camera_3">
+            <span class="feed__status">
+              <span class="tick" data-tone="pending" aria-hidden="true"></span>
+              <span data-entry-state id="entry-state-camera_3">Camera 3 &middot; area_3 &middot; reading status</span>
+            </span>
+            <button
+              class="btn btn--quiet"
+              type="button"
+              data-entry-action="camera_3"
+              aria-describedby="entry-state-camera_3"
+              disabled
+            >
+              Arm
             </button>
           </div>
 
           <div class="toolbar" id="entry-camera_4">
             <span class="feed__status">
               <span class="tick" data-tone="pending" aria-hidden="true"></span>
-              <span data-entry-state id="entry-state-camera_4">Camera 4 entry &middot; reading status</span>
+              <span data-entry-state id="entry-state-camera_4">Camera 4 &middot; area_4 &middot; reading status</span>
             </span>
-            <button
-              class="btn btn--quiet"
-              type="button"
-              data-entry-action="camera_4"
-              aria-describedby="entry-state-camera_4"
-              disabled
-            >
-              Arm entry review
-            </button>
           </div>
 
           <p
@@ -334,6 +386,7 @@
             role="status"
             aria-live="polite"
           ></p>
+          <p class="entry__notice" id="entry-notice"></p>
         </div>
 
         <details class="legend">
@@ -344,16 +397,29 @@
             it cannot tell family from anyone else.
           </p>
           <p>
-            <strong>Restarting the service disarms both cameras.</strong> Arm again after
-            a restart if you want it. Turning it off stops further snapshots being kept and
-            does not release any that are already kept. Snapshots saved before any of this
-            are left exactly as they were.
+            <strong>Camera 4 is always armed and has no control.</strong> Home and Away do
+            not touch it, and nothing you switch changes it. On Cameras 1&ndash;3, Home
+            keeps nothing and Away keeps every person in view; switch one yourself and the
+            mode reads Custom.
           </p>
           <p>
-            An entry that had already started when you armed can be missed, because it has
-            one start time for the whole time somebody was on camera. There is no
-            fighting or behaviour detection here at all, and Camera 2 and Camera 3 are not
-            watched for anything like it.
+            <strong>Turning review off from Away is confirmed.</strong> One camera or the
+            whole set, the page asks first. Cancel or Escape sends nothing and changes
+            nothing.
+          </p>
+          <p>
+            Your choice is saved, so it survives a restart, and a fresh install starts at
+            Home. Arming a camera only takes effect while its area is confirmed by the
+            camera service; if that cannot be read the camera keeps your setting and keeps
+            nothing until it can be read again. Switching off stops further snapshots
+            being kept and does not release any that are already kept. Snapshots saved
+            before any of this are left exactly as they were.
+          </p>
+          <p>
+            On Cameras 1&ndash;3 an entry that had already started when you armed can be
+            missed, because it has one start time for the whole time somebody was on
+            camera. Camera 4 has no arming moment, so it keeps those too. There is no
+            fighting or behaviour detection here at all.
           </p>
         </details>
       </section>
@@ -364,8 +430,8 @@
             <h2 class="section__title" id="events-heading">Saved detections</h2>
             <p class="section__lede">
               An ordinary detection in a monitored area expires after 6&nbsp;h. A person
-              entering a restricted area on Camera 1 or Camera 4 while you have armed it
-              is held until you delete it.
+              inside a watched area while that camera is armed &mdash; and always on
+              Camera 4 &mdash; is held until you delete it.
             </p>
           </div>
           <p class="tally" id="events-tally">Waiting for detection data.</p>
@@ -378,8 +444,8 @@
             <strong>Restricted area entry</strong> means a person was inside that
             camera&rsquo;s own restricted area &mdash; a candidate for review, nothing
             more. <strong>Kept for review</strong> is held until you delete it: a person
-            gets here through an armed restricted area, an animal on sight on the first
-            three cameras. <strong>Previously kept</strong> was held before this rule
+            inside a watched area while that camera is armed, or an animal on sight on the
+            first three cameras. <strong>Previously kept</strong> was held before this rule
             existed and is left exactly as it was. In this prototype a monitored area is
             the whole camera frame.
           </p>
@@ -511,6 +577,32 @@
           <button class="btn" type="submit" id="delete-cancel" autofocus>Cancel</button>
           <button class="btn btn--confirm" type="button" id="delete-confirm">
             <span id="delete-confirm-label">Delete</span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <!-- The one thing this page asks before it stops keeping people. The same native
+         dialog and the same confirm classes as the deletion above, because it is the
+         same shape of act: a sentence, a scope, two buttons, and no request at all
+         until Confirm. -->
+    <dialog
+      class="confirm"
+      id="entry-confirm"
+      aria-labelledby="entry-confirm-title"
+      aria-describedby="entry-confirm-scope"
+    >
+      <form method="dialog" class="confirm__form">
+        <h2 class="confirm__title" id="entry-confirm-title">Stop keeping person snapshots?</h2>
+        <p class="confirm__scope" id="entry-confirm-scope"></p>
+        <p class="confirm__note">
+          Snapshots already kept are untouched, and animals stay monitored on Cameras
+          1&ndash;3 whatever you decide here.
+        </p>
+        <div class="confirm__actions">
+          <button class="btn" type="submit" id="entry-cancel" autofocus>Cancel</button>
+          <button class="btn btn--confirm" type="button" id="entry-confirm-button">
+            <span id="entry-confirm-label">Disarm</span>
           </button>
         </div>
       </form>

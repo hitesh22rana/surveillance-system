@@ -10,19 +10,24 @@
 # full-frame rule that used to qualify any tracked person on every camera is gone,
 # and native person alerts are switched off on all four with
 # `review.alerts.enabled: false`. Retention for people is now decided by
-# `scripts/retain.py` and only while a person has armed entry review by hand on
-# the dashboard; nothing here decides it, and nothing here fires an alert.
+# `scripts/retain.py`: `camera_4`'s area_4 area always, and cameras 1-3 only while
+# a person has armed them by hand on the dashboard. Nothing here decides it, and
+# nothing here fires an alert.
 #
-# The optional per-camera restricted area, `camera_N_restricted`, is NOT in this
-# file. See docs/restricted-zone.md for one commented example and for why it is
-# inactive here: the polygons are deployment-specific and are drawn in Frigate's own
-# zone editor, so a generic full-frame guess would arm every frame and make the
+# The per-camera restricted area, `camera_N_restricted`, is NOT in this file for
+# cameras 1 and 4. See docs/restricted-zone.md for one commented example and for why
+# it is inactive here: those polygons are deployment-specific and are drawn in Frigate's
+# own zone editor, so a generic full-frame guess would arm every frame and make the
 # zone meaningless. Once a polygon exists, `retain.py` reads /api/config, sees the
 # zone as person-only at loitering_time 0, and only then offers the Arm control for
-# that camera. Until then the camera reads "restricted area not configured" and
-# cannot be armed.
+# that camera. Until then the camera reads "area not confirmed" and cannot be armed.
 #
-# What arming does and does not mean. While armed, a person inside the restricted
+# Cameras 2 and 3 need no second zone at all: the `camera_N_area` above is already
+# what their Arm control watches, and it lists person among the animal classes these
+# two cameras track, so arming one of them keeps anyone in view — presence, not an
+# entry.
+#
+# What arming does and does not mean. While armed, a person inside that camera's
 # area has their snapshot kept for review. That is a candidate for a person to
 # look at. It is not a judgement: this model reports one class, person, so it
 # cannot tell family from anyone else, and a zone cannot say which side of a
