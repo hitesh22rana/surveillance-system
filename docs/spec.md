@@ -5,19 +5,29 @@ phases do not start until the earlier one is accepted by hand.
 
 As of 2026-10-02, live camera acceptance is still **pending**. The 401 on camera
 access was a confirmed recorder-side lockout that expired once the clients were
-stopped. Credentials were not changed and
-work again as written. All four RTSP channels are live, and Frigate capture and
-process are verified at roughly 3 FPS. What is still unverified is the detection
-work itself: zone walkthrough, accuracy measurement, night behaviour, and alert
-timing. The dashboard is intentionally stopped at the owner's request. See
+stopped. Credentials were not changed and work again as written. All four RTSP
+channels are live, Frigate capture and process are verified at roughly 3 FPS,
+each main channel serves HEVC 2560×1440 at 25 fps, and all four players were
+watched running full-resolution video in a browser before and after the Frigate
+restart that applied the six-hour snapshot window. The expanded
+`scripts/check.py` suite passes every assertion. What is still unverified is
+the detection work itself: zone walkthrough, accuracy measurement, night
+behaviour, and alert timing — and, on retention, an actual six-hour expiry, a
+retained event followed past six hours, and the hand-delete path. See
 [`validation.md`](validation.md) for exactly what was and was not run.
 
 ## What is actually known
 
 - **Deployment hardware is unknown; the current development host uses macOS
   ARM64.** Four independent camera views exist as HEVC 352×288 substreams on
-  recorder channels 1–4. Channels on one recorder and separate devices are both
-  supported; only byte-identical URLs duplicate a view.
+  recorder channels 1–4 for detection, and as HEVC 2560×1440 main channels for
+  the live view. That 25 fps is the channel's reported source rate; no browser
+  render frame rate has been measured. Channels on one recorder and separate
+  devices are both supported; only byte-identical URLs duplicate a view.
+- **Live quality and detection quality are unrelated.** The browser gets the
+  main channel; the detector runs on the 352×288 low channel at 3 fps, and every
+  saved snapshot is cut from *that* frame. A perfect live picture does not make
+  an event image sharp, and raising `detect.*` is what would.
 - **No real IPs or credentials exist in this repository.** `.env` is gitignored,
   `chmod 600`, and never committed.
 - **Detection model:** bundled SSDLite MobileNetV2 on OpenVINO, CPU, `person`
@@ -28,13 +38,34 @@ timing. The dashboard is intentionally stopped at the owner's request. See
   measured failure justifies it. That trigger is a number, not a hunch: a
   specific class of false negative or false positive that tuning `zones`,
   `objects`, `motion`, and `detect.fps` cannot resolve.
-- **Passwords go into `.env` raw.** Frigate encodes the password component
-  itself; a pre-encoded value is double-encoded and rejected with 401.
+- **There is exactly one detection rule: a person in a named zone.** No
+  behaviour model, no anomaly detection, no classification beyond `person`, and
+  no fall-over, package or line-crossing rule. Nothing in the repository should
+  be read as implying otherwise, because none of it exists.
+- **Passwords are encoded twice, by different rules, on purpose.** The four
+  detect URLs in `.env` take the password raw, because Frigate applies
+  `escape_special_characters` itself and a pre-encoded value is double-encoded
+  and rejected with 401. The four main URLs take it URL-encoded, because go2rtc
+  substitutes the value as-is and applies no encoder.
 - **Frigate's raw `/api/stats` contains RTSP credentials.** `cpu_usages.cmdline`
   carries the full process command line, including every camera's RTSP URL. Any
   browser-facing surface must therefore never proxy raw stats. The dashboard
   pins a fixed key allowlist server-side for exactly this reason, and
   `scripts/check.py` asserts the pinned shape.
+- **Retention has two lifetimes, and only one of them is a timer.** An ordinary
+  snapshot is kept six hours (`snapshots.retain.default: 0.25` days) and is
+  deleted by Frigate's periodic cleanup, about every five minutes, so six hours
+  is a nominal cutoff rather than an exact deletion time. A `person`
+  event that entered its own camera's zone is pinned by `scripts/retain.py`
+  through Frigate's native `retain_indefinitely`, which that cleanup skips. The
+  example zones are the full frame, so most saved person snapshots are pinned and
+  therefore kept until a person deletes them; growth is bounded by review, not by
+  a clock. Both lifetimes are Frigate's own bookkeeping — go2rtc restreams and
+  keeps nothing. The worker's boundary behaviour is verified against a fake
+  Frigate, and its pinning is **observed on the live stack** (49 pinned plus 27
+  already retained across 76 events; a later pass found all 76 already retained
+  and exited 0). No expiry has been waited out, and no retained event has been
+  confirmed to survive past six hours.
 
 ## Phase 1 — one camera, one zone, person loitering
 
@@ -78,6 +109,15 @@ conditions below have not been met.
   endpoint shapes: `/api/stats`, `/api/events`, `/api/camera_1..4/latest.jpg`,
   and `/api/events/<native-id>/snapshot.jpg`, where the id is Frigate's own
   `<frame_time>-<rand_id>` tracker form. `GET` and `HEAD` only.
+- Live video is pinned just as tightly: one exact path serves go2rtc's bundled
+  player (`/video-rtc.js`), and `/live/camera_1` … `/live/camera_4` are WebSocket
+  upgrades, each naming one main stream with no query string at all. go2rtc's own
+  config, stream list and control WebSocket are not proxied, and there is no
+  generic `/live/` path — a fifth camera, or any suffix on a camera path, is a
+  404 rather than a different stream.
+- The console code contains **no write path of any kind**: no `POST`, no
+  `DELETE`, no state mutation, no login. Everything it shows, it can only read.
+  That is what makes review a person's decision rather than the page's.
 - `/api/stats` is rewritten to a **fixed** upstream URI with a **fixed** key
   allowlist, and `/api/events` to a **fixed, bounded** upstream URI. Both discard
   the client's query string, so no override can widen the surface.
@@ -87,11 +127,39 @@ conditions below have not been met.
 - Per-camera status is derived from `camera_fps`, `process_fps` and
   `detection_enabled` in the newest stats sample, and requires a recent picture
   before a camera is called healthy. A failed or stale read clears the sample,
-  so an unreadable backend reads as "no data", never as healthy.
+  so an unreadable backend reads as "no data", never as healthy. Live playback is
+  judged separately, from frames this browser has actually decoded, so a camera
+  can be detecting perfectly while the picture here is refused or stalled.
 - The event list contains only person events whose `zones` intersect the required
   zone of a camera in the current filter. It is never presented as "every person
   detection"; an empty list is explicitly labelled as not proving the cameras
   were watching.
+- **The live view is 2560×1440; a saved snapshot is 352×288.** The page says
+  which is which, because a full-resolution live picture beside a low-resolution
+  event image otherwise reads as one camera running at two qualities at once.
+
+### Retention
+
+- Two lifetimes, deliberately: `snapshots.retain.default: 0.25` (six hours, in
+  days) for everything ordinary, deleted by Frigate's periodic cleanup. Because
+  that cleanup runs about every five minutes, six hours is the cutoff an ordinary
+  snapshot is measured against, not the minute it disappears.
+- `scripts/retain.py` pins qualifying events — `person`, snapshot-bearing, in
+  **that camera's** required zone — by setting Frigate's own
+  `retain_indefinitely` every 30 seconds. It holds no state of its own, so a
+  restart neither re-pins nor forgets.
+- It runs as a `retention` service with **no ports, no `env_file`, no credential
+  and no database of its own**, reading only `http://frigate:5000` on the
+  internal network.
+- Its automated pass contains no `DELETE`. Deleting is one named event id, typed
+  by a person, after review, and it is irreversible:
+  `docker compose exec retention python3 /app/retain.py --delete-reviewed EVENT_ID`.
+  There is deliberately no delete button in the browser and no undo.
+- Consequence, stated rather than hidden: with the default full-frame zones,
+  **most saved person snapshots are retained until a person deletes them.** Disk
+  growth is bounded by review, not by a timer, and there is no cap. If the worker
+  is stopped longer than the six-hour window, events it never saw can be cleaned
+  up first — which is why the worker has to be watched running, not just written.
 
 **Latency target: 5 seconds from loiter qualification to a visible alert.** A
 target measured by hand, not a guarantee. The three-second loitering threshold
@@ -106,6 +174,9 @@ rain, or when the host is loaded.
   **Met as of 2026-10-02:** the lockout expired with clients stopped, unchanged
   credentials work, and all four channels stream at roughly 3 FPS. This unblocks
   measurement; it does not satisfy the zone criteria below.
+- All four main channels play live video in a browser at their own resolution.
+  **Met as of 2026-10-02:** four players, 2560×1440 HEVC decoded, no errors. This
+  says the live path works, not that detection is any good.
 - Every camera independently passes the Phase 1 checks in
   [`validation.md`](validation.md). Zone walkthrough, accuracy, night, and alert
   timing are all still pending.
@@ -122,7 +193,24 @@ rain, or when the host is loaded.
 - False positives reviewed per camera, not pooled, because lighting and scene
   differ.
 - `scripts/check.py` passes against the live stack, with its Frigate-dependent
-  checks actually run rather than skipped.
+  checks actually run rather than skipped. **Met 2026-10-02**: every assertion in
+  the expanded script holds — all four cameras detecting, the 11 forbidden paths
+  refused, `POST`/`DELETE` refused on `/api/stats` and `/live/camera_1`,
+  `media-src 'self' blob:`, the player module served 200, no credentials in the
+  three served assets, the stats allowlist held plain and against an override, 50
+  events serving real snapshot JPEGs, and all 48 settled zone events kept. Note
+  that this script opens no WebSocket: playback is a browser observation and
+  cannot be closed here.
+- **The retention worker is observed working on the live stack**, not only
+  against a fake Frigate: a zone snapshot visibly gains `retain_indefinitely`,
+  survives a worker restart without being re-pinned, and an event deleted by hand
+  with `--delete-reviewed` is really gone. **Partly met 2026-10-02:** the worker
+  ran against the live stack and pinned 49 of 76 qualifying events, a later pass
+  found all 76 already retained and exited 0, and a pass after the Frigate
+  restart found 78 already retained and exited 0, so pinning and not pinning
+  twice are observed on real events. The hand-delete path is not, and nothing has
+  been watched surviving the six-hour window. Until that is recorded, retention
+  is runtime-verified for pinning only.
 
 ## Phase 3 — email snapshot alerts
 
@@ -168,9 +256,26 @@ the plan.
 
 ## Risks
 
-- **Retention and disk.** Snapshots accumulate. `storage/` is bind-mounted and
-  will fill a disk if nothing prunes it. Snapshot retention is three days. A
-  full disk can take the host down, including detection.
+- **Retention and disk.** Snapshots accumulate, and after the retention worker is
+  running the accumulation is deliberate: retained person events have **no
+  automatic expiry** and are removed only by a person, by hand. With the default
+  full-frame zones that is most saved person events. Nobody reviewing means the
+  disk fills, and a full disk takes the host down, detection included. Untreated
+  events — anything the worker never saw — age out instead, at the first cleanup
+  pass after they pass six hours. Disk growth therefore has to be watched as an
+  operator routine, and `scripts/check_retention.py` proves nothing about how
+  this behaves live.
+- **The worker is a single point of evidence loss.** Nothing pins zone events but
+  a 30-second poll. Stopped or crash-looping longer than the six-hour window, it
+  silently loses events Frigate then cleans up, and nothing in the stack reports
+  that. The operational fix is watching the worker's log lines, which report
+  pinned, already-retained and skipped counts each pass.
+- **The live view depends on a component nobody here controls.** It runs through
+  go2rtc, bundled in the Frigate image, with its own player script. A go2rtc
+  upgrade can change the codec string the browser must support, the WebSocket
+  shape, or the module's exports, and the dashboard's honest failure modes
+  ("cannot decode HEVC", "no picture") are what keep that from reading as a
+  healthy camera. It is a dependency, not a guarantee.
 - **Camera outages.** A camera that stops streaming is silent. Nothing in this
   prototype fully distinguishes "nobody is in the zone" from "the camera is dead
   and therefore reports nobody is in the zone." The console narrows this with
@@ -216,7 +321,16 @@ the plan.
   neutral names until physical cameras are assigned.
 - Acceptance criterion, per camera: person remains in that camera's zone for
   three seconds, at any hour.
-- Snapshots retained three days; continuous recordings disabled.
+- Live view is the camera's own main channel, un-re-encoded, with no quality
+  ladder: full resolution or an explicit "this browser cannot decode HEVC".
+- Retention: six hours for an ordinary snapshot (`0.25` days), and Frigate's own
+  `retain_indefinitely` for a person event that entered its own camera's zone.
+  Continuous recordings stay disabled. Both lifetimes are Frigate's own; go2rtc
+  restreams and retains nothing.
+- Deleting a reviewed event is a named CLI call by the operator, never a button
+  in the browser and never something an agent runs.
+- Only "person in a named zone" is detected. No behaviour, anomaly or
+  classification detection is in scope, and none is built.
 - No footage or camera credentials are sent to OpenCode or committed to Git.
 - Detection stays on the home host; email requires internet only for delivery.
 - Measure at least ten inside-zone and ten outside-zone passages per camera in
