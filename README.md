@@ -10,10 +10,12 @@ the host.
   `camera_1_area` … `camera_4_area`.
 - Detection input is **352×288 at 3 fps per camera** (the HEVC substream from
   recorder channels 1–4). That is a starting point chosen to keep a CPU-only
-  four-camera suite within reach, not a measured result. Tune
-  `detect.width` / `detect.height` / `detect.fps` in `config/config.yml`.
-  **Not** `model.width` / `model.height`: those must stay **300×300** to match
-  the bundled SSDLite MobileNetV2 input tensor, and frames are resized into it.
+  four-camera suite within reach, and on 2026-10-02 it did run at 3.0–3.1 fps on
+  all four — but it has not been shown to be the right rate for detection
+  quality. Tune `detect.width` / `detect.height` / `detect.fps` in
+  `config/config.yml`. **Not** `model.width` / `model.height`: those must stay
+  **300×300** to match the bundled SSDLite MobileNetV2 input tensor, and frames
+  are resized into it.
 - Detector: the bundled SSDLite MobileNetV2 on OpenVINO, CPU, `person` only. No
   custom training or inference code.
 - Continuous recording disabled (`record.enabled: false`). Snapshots retained
@@ -31,17 +33,19 @@ the host.
 | Four-camera compose + example config | implemented |
 | nginx read-only proxy with pinned stats keys and bounded events | implemented |
 | Dashboard UI (previews, per-camera status, zone events) | implemented |
-| Camera authentication | four channels authenticated earlier, HEVC 352×288 |
-| Runtime camera access | **401 now**, even from a host-side probe and a direct RTSP Digest login — unresolved |
-| `scripts/check.py` smoke check | final run passed the proxy boundary checks, then reported `FAILED` at `camera_1` (`fps 0`) because captures are paused |
+| Camera authentication | four channels, HEVC 352×288, re-probed 2026-10-02 |
+| Runtime camera access | **recovered 2026-10-02** — the recorder lockout expired; all four channels stream |
+| Live capture and detector inference | **verified 2026-10-02** — 3.0–3.1 fps in, detection enabled; 9.45 ms inference is exploratory only |
+| `scripts/check.py` smoke check | last run passed the proxy boundary checks, then reported `FAILED` at `camera_1` (`fps 0`) while captures were paused; that run predates the recovery, and no full pass is claimed |
 | Zones drawn on real boundaries | **not done** — every zone is the full frame |
-| Live detection, latency, night testing | **not started**, **not verified** |
+| Zone walkthrough, alert timing, night, false positives | **not run**, **not verified** |
 | Email notifications | **not started**, still a later phase |
 
 What was actually run, and what it does not show:
 
 - `docker compose config` parses, and both containers start. Cameras were
-  temporarily disabled to avoid a login-retry loop while access is 401.
+  temporarily disabled during the lockout to avoid a login-retry loop while
+  access was 401; they are enabled again.
 - `nginx -t` on the dashboard config passes; `node --check dashboard/app.js`
   passes (syntax only).
 - Browser review: desktop and 375 px screenshots, and no horizontal overflow at
@@ -50,19 +54,43 @@ What was actually run, and what it does not show:
   evidenced.
 - Root security headers, the six denied routes, and `POST`/`DELETE` on
   `/api/stats` all hold, and the stats history key allowlist holds both plain and
-  against an override attempt, with no credential leaks.
-- The final `scripts/check.py` run passed all of the above, then reported
-  `FAILED` at `camera_1` (`fps 0`) because captures are paused. That is what the
-  run did.
+  against an override attempt, with no credential leaks. This is the historical
+  proxy validation, from while the dashboard was running.
+- The last `scripts/check.py` run passed all of the above, then reported
+  `FAILED` at `camera_1` (`fps 0`) while captures were paused. That run predates
+  the recovery below and is not a current result. The dashboard is intentionally
+  stopped, so no full smoke pass is claimed.
 - With Frigate stopped, the UI showed "Camera service unreachable" and "Recent
   detections unavailable (HTTP 502)" instead of an empty event list, and the
-  denied paths still refused. Frigate was restarted with captures still disabled.
-- The recorder's admin credentials were reconfirmed by the user, yet a direct
-  RTSP Digest login still answers 401. The cause is not established; lockout is
-  a hypothesis, not a diagnosis.
+  denied paths still refused. Frigate was restarted afterwards with captures
+  still disabled; captures are enabled again now.
+- **Recovery, 2026-10-02.** After VLC was closed and both containers were
+  stopped, no login was attempted until past the recorder's 240-second
+  `remainLockSecond`. The recorder's native Web3 login then **succeeded with
+  unchanged credentials**, `getBlockUserInfoList` returned `0`, and the
+  diagnostic session was logged out. `ffprobe` then succeeded sequentially on all
+  four channels, each HEVC 352×288. Recovery on the same credentials confirms
+  the lockout — not a credential problem — was what blocked access. The trigger
+  is not established: Frigate's earlier double-encoded-password retries are a
+  likely trigger, but recorder audit logs were not examined, so exact trigger is
+  not proven.
+- **Four cameras live in Frigate, 2026-10-02.** The git-ignored `config/config.yml`
+  was restored from `config/config.example.yml` and **only Frigate** was started,
+  with raw passwords in the RTSP URLs. Live stats: all four `camera_fps` 3.0–3.1,
+  `process_fps` 3.0–3.1, `detection_enabled` true. The four `latest.jpg`
+  responses were `200` with valid JPEGs — latest-frame previews, **not** saved
+  detection snapshots. Two minutes of fresh Frigate logs contain **no 401
+  entries**.
+- **Inference latency is exploratory.** OpenVINO reported `inference_speed`
+  9.45 ms in a snapshot: one sample on macOS Docker, not a benchmark and not the
+  accepted figure.
+- **Dashboard intentionally stopped**, at the user's request. It is the only
+  service not running.
 
-The suite is **not** confirmed watching anything. Live detection has never been
-observed. The full record is in [`docs/validation.md`](docs/validation.md).
+The suite **is** streaming and the detector **is** running, but nothing here shows
+it catching a person: no zone walkthrough, alert timing, night, or false-positive
+check has been run, and no detection has been observed. The full record is in
+[`docs/validation.md`](docs/validation.md).
 
 ## Setup
 
@@ -88,6 +116,25 @@ A camera you cannot reach does **not** stop Frigate: that feed degrades to a
 reconnecting stream while the other three keep detecting, and it comes back on
 its own once the camera is reachable again. Use `enabled: false` in
 `config/config.yml` only to remove a camera from the suite deliberately.
+
+### Avoiding another lockout
+
+This recorder locks an account out after repeated failed logins — 240 seconds,
+`remainLoginTimes` 5 — and it took the whole timer to clear on 2026-10-02.
+
+- **Write the password raw and let Frigate encode it.** A pre-encoded value is
+  encoded twice and the camera answers 401, which is indistinguishable from a
+  wrong password.
+- **Validate one channel before enabling four.** Probe a single RTSP URL with
+  `ffprobe` first, then enable `camera_1`, confirm it in `/api/stats`, and only
+  then bring up cameras 2–4. Four simultaneous bad credentials reach the retry
+  limit four times faster than one.
+- **Stop retrying the moment you see 401.** Frigate reconnects on a timer and
+  will burn the remaining attempts on its own. Stop the container instead of
+  waiting it out, then verify the credentials by hand before restarting.
+- **Leave illegal-login security enabled** on the recorder. Disabling it to make
+  a flaky feed connect trades a lockout you can recover from for an account that
+  is open to guessing.
 
 Then draw the real zone on each camera in Frigate's own zone editor at
 <https://localhost:8971/settings> (**Configuration → Zones and masks**). The

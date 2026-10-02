@@ -3,9 +3,14 @@
 Minimal surveillance detection, in phases. Each phase has an exit condition. Later
 phases do not start until the earlier one is accepted by hand.
 
-Live camera acceptance is **pending**: the four channels authenticated at one
-point, but camera access now returns 401 and the suite is not confirmed running.
-See [`validation.md`](validation.md) for exactly what was and was not run.
+As of 2026-10-02, live camera acceptance is still **pending**. The 401 on camera
+access was a confirmed recorder-side lockout that expired once the clients were
+stopped. Credentials were not changed and
+work again as written. All four RTSP channels are live, and Frigate capture and
+process are verified at roughly 3 FPS. What is still unverified is the detection
+work itself: zone walkthrough, accuracy measurement, night behaviour, and alert
+timing. The dashboard is intentionally stopped at the owner's request. See
+[`validation.md`](validation.md) for exactly what was and was not run.
 
 ## What is actually known
 
@@ -98,9 +103,12 @@ rain, or when the host is loaded.
 **Exit conditions:**
 
 - The 401 on camera access is resolved and all four channels stream again.
-  Nothing below is measurable until they do.
+  **Met as of 2026-10-02:** the lockout expired with clients stopped, unchanged
+  credentials work, and all four channels stream at roughly 3 FPS. This unblocks
+  measurement; it does not satisfy the zone criteria below.
 - Every camera independently passes the Phase 1 checks in
-  [`validation.md`](validation.md).
+  [`validation.md`](validation.md). Zone walkthrough, accuracy, night, and alert
+  timing are all still pending.
 - Per-camera detector load is measured, not assumed. If a camera pushes
   detection past the 5 second target on cameras already accepted, that camera
   waits rather than degrading the working ones.
