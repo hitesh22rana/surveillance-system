@@ -44,14 +44,20 @@ PAGE_SIZE = 7  # forces the walk past one page for a tiny fixture
 def console_fixture():
     """A deep archive of this suite's person snapshots, plus one row of every kind
     the deletion path has to refuse. Every tag is six lowercase alphanumerics, so
-    every row is addressable by a native id and none is skipped as unaddressable."""
+    every row is addressable by a native id and none is skipped as unaddressable.
+
+    The animal rows carry the new rule on both sides: a cat on camera_3 is a saved
+    snapshot like any other and must delete, while a cat on camera_4 is refused,
+    because camera_4 watches for people only.
+    """
     rows = [event(f"a{n:05d}", f"camera_{n % 4 + 1}", BASE_TIME + n) for n in range(ARCHIVE)]
     rows += [
         event("act001", "camera_1", BASE_TIME + ARCHIVE, end_time=None),  # never ended
         event("areav1", "camera_2", BASE_TIME + ARCHIVE + 1, zones=["camera_2_area"]),
         event("outsid", "camera_9", BASE_TIME + ARCHIVE + 2, zones=["camera_9_loitering"]),
-        event("cat001", "camera_3", BASE_TIME + ARCHIVE + 3, label="cat"),
-        event("noclip", "camera_4", BASE_TIME + ARCHIVE + 4, snapshot=False),
+        event("cat001", "camera_3", BASE_TIME + ARCHIVE + 3, label="cat"),   # eligible
+        event("dog004", "camera_4", BASE_TIME + ARCHIVE + 4, label="dog"),   # refused
+        event("noclip", "camera_4", BASE_TIME + ARCHIVE + 5, snapshot=False),
     ]
     return rows
 
@@ -69,13 +75,33 @@ def ineligible(fake, tag):
     raise AssertionError(f"no fixture row tagged {tag}")
 
 
+# Restated here and deliberately NOT imported from retain.py, which is the whole
+# point of these two helpers: if the worker's policy and this check ever drift
+# apart, the check fails instead of agreeing with whatever the code now says.
+#
+# A row is eligible when it is a configured camera's own snapshot-bearing event
+# whose label this suite keeps: a person on any camera, or one of the ten COCO 91
+# animal classes on camera_1, camera_2 or camera_3. camera_4 watches for people
+# only, so an animal label there is not eligible however it reached the upstream.
+ANIMAL_LABELS = (
+    "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe",
+)
+ANIMAL_CAMERAS = ("camera_1", "camera_2", "camera_3")
+
+
+def eligible_row(row):
+    """True for a row this suite's archive, count and delete paths must all accept."""
+    return (row["camera"] in retain.CAMERAS
+            and row.get("has_snapshot") is True
+            and (row.get("label") == "person"
+                 or (row.get("label") in ANIMAL_LABELS and row["camera"] in ANIMAL_CAMERAS)))
+
+
 def eligible_ids(fake):
     """The rows the policy counts, restated here and deliberately not imported: a
-    configured camera's own person event that carries a snapshot, however old."""
-    return sorted(row["id"] for row in fake.events
-                  if row["camera"] in retain.CAMERAS
-                  and row.get("has_snapshot") is True
-                  and row.get("label") == "person")
+    configured camera's own person-or-animal event that carries a snapshot, however old."""
+    return sorted(row["id"] for row in fake.events if eligible_row(row))
 
 
 def free_port():
@@ -355,7 +381,8 @@ def check_summary():
             assert len(reads) > 1, f"the walk read {len(reads)} page(s), not a deep one"
             assert all("offset" not in read for read in reads), \
                 f"an offset parameter was sent; Frigate 0.18 ignores it: {reads}"
-            assert all(read["sort"] == "date_desc" and read["labels"] == "person"
+            assert all(read["sort"] == "date_desc"
+                       and read["labels"] == "person," + ",".join(ANIMAL_LABELS)
                        and read["has_snapshot"] == "1" for read in reads), \
                 f"a page left the pinned query shape: {reads}"
             assert all(read.get("after") == "0.0" for read in reads), \
@@ -375,10 +402,7 @@ def eligible_rows(fake):
     start_time first, and id descending among rows sharing one. Restated here and
     deliberately not imported, the same way eligible_ids is: the order is part of the
     contract, so reusing the production sort would only prove it sorts like itself."""
-    rows = [row for row in fake.events
-            if row["camera"] in retain.CAMERAS
-            and row.get("has_snapshot") is True
-            and row.get("label") == "person"]
+    rows = [row for row in fake.events if eligible_row(row)]
     return sorted(rows, key=lambda row: (row["start_time"], row["id"]), reverse=True)
 
 
@@ -442,8 +466,8 @@ def check_events_pages():
                         assert field in row, f"{name} row {row.get('id')!r} has no {field}"
                     assert row["camera"] in retain.CAMERAS, \
                         f"{name} carried a row from {row['camera']}"
-                    assert row["label"] == "person" and row["has_snapshot"] is True, \
-                        f"{name} carried {row['id']}, which is not a saved person snapshot"
+                    assert eligible_row(row), \
+                        f"{name} carried {row['id']}, which is not a saved person-or-animal snapshot"
             for leak in ("cmdline", "rtsp://", "/media/frigate", "frigate:5000"):
                 assert leak not in json.dumps(first), f"{leak!r} reached the events body"
             assert fake.deletes == [], f"reading the archive deleted {fake.deletes}"
@@ -548,7 +572,7 @@ def check_selected_delete():
             opened = ineligible(fake, "act001")  # no end_time: a detection still running
             loitered = ineligible(fake, "a00000")
             foreign = ineligible(fake, "outsid")
-            cat = ineligible(fake, "cat001")
+            cat = ineligible(fake, "dog004")   # a dog on camera_4: not a camera that watches
             no_clip = ineligible(fake, "noclip")
             unknown = f"{BASE_TIME}.123456-zzzzzz"  # native in form, absent upstream
             asked = [loitered, ordinary, opened, foreign, cat, no_clip, unknown, loitered]
@@ -578,10 +602,24 @@ def check_selected_delete():
             text = leaks(output)
             assert f"{foreign} (from no configured camera)" in text, \
                 f"the foreign camera refusal was not reported:\n{text}"
-            assert f"{cat} (not a person)" in text, f"the non-person refusal was not reported:\n{text}"
+            assert f"{cat} (an animal on a camera that does not watch for them)" in text, \
+                f"the camera_4 animal refusal was not reported:\n{text}"
             print("ok  8 asked ids became 7: 3 deleted, 1 already gone, 3 refused (another "
-                  "camera's row, a cat, a row with no snapshot), 1 still open; a repeat of the "
-                  "same three reports them all missing and sends nothing")
+                  "camera's row, a dog on camera_4, a row with no snapshot), 1 still open; a "
+                  "repeat of the same three reports them all missing and sends nothing")
+
+            # The other half of the animal rule: a cat on camera_3 is a saved snapshot
+            # like any other. If the worker pinned it, the operator still has to be able
+            # to remove it, so it must delete rather than sit in the archive forever.
+            stray = ineligible(fake, "cat001")
+            animal = json.loads(call(port, "POST", retain.DELETE_PATH,
+                                     body={"ids": [stray]})[2])
+            assert animal == {"deleted": 1, "missing": 0, "failed": [], "active": 0}, \
+                f"a cat on camera_3 could not be deleted: {animal}"
+            assert stray not in [row["id"] for row in fake.events], \
+                "a cat on camera_3 was refused by the delete path"
+            print("ok  a cat on camera_3 deletes like any other saved snapshot, so a row the "
+                  "worker pins on sight is never a row nobody can remove")
 
 
 def check_partial_failures():

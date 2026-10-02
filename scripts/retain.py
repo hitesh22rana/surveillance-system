@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
-"""Pin the person events that loitered in a camera's own zone, so they survive pruning.
+"""Pin the person events that loitered in a camera's own zone, and the animal events
+seen on cameras 1-3, so they survive pruning.
 
 Frigate ages ordinary snapshots out on a timer (snapshots.retain.default), and a
 zone somebody stands around in fills that window faster than it is read. This
 worker sets Frigate's own retain_indefinitely on those events instead. Its poll
 deletes nothing, ever.
+
+Two rules, because two different things are worth keeping. A person is pinned
+only after 60 tracked in-zone seconds: ordinary presence is not evidence of
+anything. An animal on camera_1, camera_2 or camera_3 is pinned on sight, because
+presence is the whole of the evidence. camera_4 tracks person only and is held to
+that here regardless of what Frigate is configured to track.
 
 With --serve the same process also answers the dashboard's endpoints: the read-only
 count and the paginated archive behind the browser, and the one controlled manual
@@ -44,9 +51,28 @@ CAMERAS = ("camera_1", "camera_2", "camera_3", "camera_4")
 # the name the config gives that zone.
 REQUIRED_ZONE = {camera: f"{camera}_loitering" for camera in CAMERAS}
 TARGET_LABEL = "person"
+# The ten COCO 91 animal classes, in the labelmap's own order. The model reports a
+# species and nothing about harm, so this list is "an animal this suite watches",
+# never "a dangerous animal". There is no rat, mouse, rodent, snake or scorpion
+# class in COCO 91, so none of those can appear here at all.
+ANIMAL_LABELS = (
+    "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe",
+)
+# Cameras 1-3 track the animals; camera_4 is person-only in the Frigate config and
+# is kept that way here as a second, independent gate. Frigate's track list is the
+# first gate, this is the one that does not depend on Frigate having been
+# reconfigured: an animal event arriving on camera_4 is refused rather than pinned.
+ANIMAL_CAMERAS = ("camera_1", "camera_2", "camera_3")
+# Everything this suite keeps, listed and deleted alike. This is one set on
+# purpose: an animal snapshot the worker pins is an animal snapshot the operator
+# must be able to find and delete, and a row the worker cannot see would be a row
+# nobody can ever remove.
+PINNED_LABELS = (TARGET_LABEL,) + ANIMAL_LABELS
 REASONS = (  # the order a skipped event is counted in, one line per run_pass
     "without a snapshot",
-    f"not a {TARGET_LABEL}",
+    "not a person or a tracked animal",
+    "an animal on a camera that does not watch for them",
     "outside its own loitering zone",
     "from no configured camera",
 )
@@ -158,7 +184,7 @@ def fetch_page(api, after, boundary, limit):
     """
     params = {
         "has_snapshot": "1",
-        "labels": TARGET_LABEL,
+        "labels": ",".join(PINNED_LABELS),
         "limit": limit,
         # Frigate's events endpoint sorts with its own sort= parameter rather than a
         # bare direction, and date_desc is newest first.
@@ -247,8 +273,8 @@ def pin(api, event_id):
 
 
 def disqualification(event):
-    """Why this event is not one of this suite's snapshot-bearing person events, or
-    None if it is one. Camera, snapshot and label only.
+    """Why this event is not one of this suite's snapshot-bearing person-or-animal
+    events, or None if it is one. Camera, snapshot and label only.
 
     This is the check that gates deletion, and deliberately no zone: a zone says
     whether an event was worth keeping, not whether deleting it is allowed.
@@ -261,21 +287,31 @@ def disqualification(event):
     if event.get("has_snapshot") is not True:
         return "without a snapshot"
     # The query filter is plural (labels=) but one event carries one label.
-    if event.get("label") != TARGET_LABEL:
-        return f"not a {TARGET_LABEL}"
+    label = event.get("label")
+    if label not in PINNED_LABELS:
+        return "not a person or a tracked animal"
+    if label in ANIMAL_LABELS and camera not in ANIMAL_CAMERAS:
+        return "an animal on a camera that does not watch for them"
     return None
 
 
 def pin_disqualification(event):
     """Why this event must not be pinned, or None if it qualifies.
 
-    Only a person who actually loitered in a camera's own loitering zone is worth
-    keeping; ordinary presence is not evidence of anything, and pinning that would
-    put every routine walk-through on disk forever.
+    A person is pinned only after loitering in its own camera's loitering zone;
+    ordinary presence is not evidence of anything, and pinning that would put
+    every routine walk-through on disk forever.
+
+    An animal is pinned the moment it is seen. Presence is the whole of the
+    evidence: an animal in the area zone has already been snapshotted with
+    loitering_time 0, and making it then serve 60 more seconds in a zone it is
+    never in would be 60 seconds it was loose and unrecorded.
     """
     reason = disqualification(event)
     if reason is not None:
         return reason
+    if event.get("label") in ANIMAL_LABELS:
+        return None
     # A zone polygon is per camera, so camera_2 naming camera_1_loitering is not
     # somebody loitering in camera_2.
     if REQUIRED_ZONE[event["camera"]] not in zones(event):
@@ -331,7 +367,8 @@ def run_pass(api, page_size, max_pages):
 
 def poll_forever(api, args, lock=None):
     log(f"polling {redacted(api.base)} every {args.interval:g}s for person events with "
-        "snapshots in their own loitering zone")
+        f"snapshots in their own loitering zone, and {len(ANIMAL_LABELS)} animal labels "
+        f"on {', '.join(ANIMAL_CAMERAS)}")
     try:
         while True:
             started = time.monotonic()

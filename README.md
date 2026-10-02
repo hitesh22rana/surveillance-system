@@ -19,6 +19,15 @@ separately, on its own low substream at 3 fps.
   `camera_N_loitering` (loitering_time 60 — tracked in-zone presence reaching a
   minute). Alerts fire on the loitering zone; snapshots are saved on the area
   zone.
+- **Animals, `camera_1` … `camera_3` only.** Those three cameras also track the ten
+  COCO 91 animal classes — `bird` `cat` `dog` `horse` `sheep` `cow` `elephant`
+  `bear` `zebra` `giraffe` — and those labels are in `camera_N_area`, which is
+  already `loitering_time 0`, so an animal is snapshotted the moment it is in
+  frame. They are deliberately **not** in `camera_N_loitering`: no animal can
+  reach the 60-second person threshold, and the retention worker pins an animal on
+  sight instead. `camera_4` tracks `person` and nothing else, and the worker
+  refuses an animal event on `camera_4` on its own, without consulting Frigate.
+  See [Animals](#animals).
 - Live view: each camera's **main** channel, restreamed by the go2rtc bundled in
   the Frigate image and served over four fixed WebSocket paths, one per camera.
   Full resolution, no re-encode, no silent downgrade — a browser that cannot
@@ -34,9 +43,11 @@ separately, on its own low substream at 3 fps.
   (~4 MP) live view** — the two qualities are unrelated and the event image is the
   small one. Neither the 352×288/3 fps detection source nor the 25 fps main
   channel changed with the loitering rule or the deletion endpoint.
-- Detector: the bundled SSDLite MobileNetV2 on OpenVINO, CPU, `person` only. No
-  custom training or inference code, and no behaviour, anomaly or classification
-  model of any kind: a person in a named zone is the only rule that exists.
+- Detector: the bundled SSDLite MobileNetV2 on OpenVINO, CPU, tracking `person` on
+  all four cameras plus the ten COCO 91 animal classes on `camera_1` … `camera_3`.
+  No custom training or inference code, and no behaviour, anomaly or
+  classification model of any kind: a person loitering in a named zone, or an
+  animal on one of the first three cameras, are the only rules that exist.
 - Continuous recording disabled (`record.enabled: false`).
 - **Snapshots.** An ordinary snapshot is kept **6 hours**
   (`snapshots.retain.default: 0.25`, in days). Frigate's periodic cleanup runs
@@ -76,9 +87,9 @@ separately, on its own low substream at 3 fps.
 | Live capture and detector inference | **verified 2026-10-02** — 3.0–3.1 fps in, detection enabled; 9.45 ms inference is exploratory only |
 | Live main-stream video in a browser | **verified 2026-10-02, re-verified after the Frigate restart** — four players, 2560×1440 HEVC, no errors, detectors 2.9–3.1 fps |
 | `scripts/check.py` smoke check | **PASS 2026-10-02, expanded version** — all assertions hold: 11 forbidden paths refused, `POST`/`DELETE` refused on `/api/stats` and `/live/camera_1`, `media-src 'self' blob:`, player module 200, no credentials in the three served assets, stats held plain and against an override, all four detecting, a 50-event list with native ids plus one snapshot JPEG 200 (all 50 listed snapshot URLs separately checked at root: 200 + JPEG, across three cameras), all 48 settled zone events flagged kept. A later live pass against the deployed gateway held too: `camera_4` with no events answered one valid empty page, and raw config, raw logs, `cpu_usages` and a credential-bearing query were all refused |
-| `scripts/check_retention.py` boundary check | **PASS 2026-10-02** against a disposable fake Frigate, under the two-zone rule and under the previous whole-frame rule |
+| `scripts/check_retention.py` boundary check | **PASS 2026-10-02, re-run under the animal rule** — 14 assertions against a disposable fake Frigate, now including the ten animal labels on cameras 1–3 (pinned with no zone), the same labels refused on `camera_4` before any POST, an untracked `car` refused on label, and the listing/deleting gate agreeing with the pin gate in both directions |
 | Retention worker pinning kept snapshots | **verified live 2026-10-02, historical, under the old whole-frame rule** — first pass 49 pinned + 27 already retained = 76 events; a later `--once` found all 76 already retained, exit 0 |
-| `scripts/check_console_api.py` HTTP contract check | **PASS 2026-10-02** against a disposable fake Frigate: a 60-row archive across three pages of 25, invalid `Origin`/`Host`/content type/ids, a partial failure and a native `success: false`, the fail-closed page cap, and no automatic `DELETE` |
+| `scripts/check_console_api.py` HTTP contract check | **PASS 2026-10-02, re-run under the animal rule** — against a disposable fake Frigate: a 61-row archive across three pages of 25, invalid `Origin`/`Host`/content type/ids, a partial failure and a native `success: false`, the fail-closed page cap, no automatic `DELETE`, plus the animal rule on both sides: a `dog` on `camera_4` refused before any request, and a `cat` on `camera_3` deleting like any other saved snapshot |
 | Static checks on the deployed files | **PASS 2026-10-02** — `docker compose config -q`, the Python compile of both check scripts and `retain.py`, `node --check dashboard/app.js`, and `nginx -t` |
 | Deployed deletion gateway | **deployed 2026-10-02** — `retain.py --serve` bound on internal `0.0.0.0:8090` with **no published port**; nginx routes the three exact paths `summary`, `events` and `delete` |
 | 60-second loitering zones, alerts gated on them | **loaded and confirmed 2026-10-02** — native `/api/config` reports all four `camera_N_area` at 0 s, all four `camera_N_loitering` at 60 s, and `record.enabled` false on all four. Behaviour is still **unmeasured**: no controlled 60-second walkthrough |
@@ -90,7 +101,10 @@ separately, on its own low substream at 3 fps.
 | Ordinary six-hour expiry, watched end to end | **not done** — applied and confirmed loaded in native `/api/config`; nobody waited the window out |
 | Snapshots already kept under the old rule | **kept, and still a manual job** — nothing unpins them; only newly captured ordinary snapshots are on the six-hour timer |
 | Zones drawn on real boundaries | **not done** — every zone is the full frame |
+| COCO 91 animal rule on `camera_1` … `camera_3` | **loaded and verified 2026-10-02** — native internal `/api/config` reports person plus all ten animal classes in tracking and area zones on cameras 1–3; camera 4 stays person-only, all loitering zones stay person-only at 60 seconds, recording stays disabled. Runtime config was schema-validated before saving; private backup is ignored by Git. Real animal accuracy is not yet measured |
+| Retention worker pinning animals | **verified against a fake Frigate 2026-10-02** — `scripts/check_retention.py` pins all ten labels on cameras 1–3 with no zone at all, refuses the same labels on `camera_4` before any POST, and confirms the listing/deleting gate accepts the pinned rows and refuses the camera-4 ones. Not exercised against a real animal event, because none exists yet |
 | Controlled zone walkthrough, alert timing, night, false positives | **not run**, **not verified** |
+| Animal detection accuracy | **not verified** — no animal has been on any of these four feeds under the new rule; misses are expected at 352×288 |
 | Email notifications | **not started**, still a later phase |
 
 What was actually run, and what it does not show:
@@ -358,13 +372,14 @@ Two different lifetimes, and it matters which is which.
   actually deletes it, so six hours is a **nominal cutoff, not an exact
   ceiling**: a file goes at the first cleanup after it passes 0.25 days.
 - **A `person` event that loitered 60 seconds in its own camera's loitering zone
-  is kept until you delete it.** The `retention` service (`scripts/retain.py`)
-  polls Frigate every 30 seconds and sets Frigate's own `retain_indefinitely` flag
-  on exactly those events. Periodic cleanup skips a retained event, so it survives
-  on its own, with no local state: a restart neither re-pins nor forgets. The
-  worker publishes no port, opens no database of its own, holds no credential, and
-  reads nothing but the internal API. Both lifetimes are Frigate's own
-  bookkeeping; go2rtc restreams the live view and holds nothing.
+  is kept until you delete it. So is an animal on `camera_1` … `camera_3`.** The
+  `retention` service (`scripts/retain.py`) polls Frigate every 30 seconds and sets
+  Frigate's own `retain_indefinitely` flag on exactly those events. Periodic cleanup
+  skips a retained event, so it survives on its own, with no local state: a restart
+  neither re-pins nor forgets. The worker publishes no port, opens no database of
+  its own, holds no credential, and reads nothing but the internal API. Both
+  lifetimes are Frigate's own bookkeeping; go2rtc restreams the live view and holds
+  nothing.
 
 The two zones per camera are what make that distinction possible.
 `camera_N_area` is the whole frame with `loitering_time: 0`, so **every** person
@@ -430,6 +445,61 @@ evidence.
 classification detection beyond "a person loitering in a named zone". The 60
 second threshold is a timer, not a model, and it makes no claim about what
 anybody is doing. There is no such model in this repository.
+
+## Animals
+
+`camera_1`, `camera_2` and `camera_3` track the ten COCO 91 animal classes as well
+as `person`. `camera_4` tracks `person` and nothing else.
+
+| | person | animal |
+|---|---|---|
+| Tracked on | all four cameras | `camera_1` … `camera_3` |
+| In `camera_N_area` (`loitering_time: 0`) | yes | yes — snapshotted on sight |
+| In `camera_N_loitering` (`loitering_time: 60`) | yes | **no** |
+| Pinned by `retain.py` when | it carried its own loitering zone | it was seen, no zone needed |
+| Row text reads | `Monitored area` | `Dog · Monitored area` — the class, then the area |
+| Dashboard row reads | `Kept for review` | `Kept for review` |
+
+The zones carry the whole rule. An animal label sits in `camera_N_area`, which is
+already `loitering_time: 0`, so it is snapshotted the instant it is in frame. It is
+deliberately absent from `camera_N_loitering`, so no animal can reach the 60-second
+person threshold and the worker pins it on sight instead — a stray dog does not get
+60 free seconds while a counter it will never satisfy runs.
+
+Three things this is **not**.
+
+- **It is not a harm judgement.** SSDLite MobileNetV2 reads `coco_91cl_bkgr.txt`
+  and reports a species. "Harmful" is decided by a human afterwards, never by the
+  model. No class here means dangerous.
+- **Rats, snakes and scorpions are not in it.** COCO 91 has no rodent, snake or
+  scorpion class, so those cannot be detected here at all — they need a different
+  model, which this configuration deliberately does not have.
+- **It is not verified against a real animal.** Detection runs at 352×288 and
+  3 fps. A person fills the frame; an animal at the edge of one is far smaller in
+  those pixels, so misses are expected. Nothing here has been measured on these
+  four feeds, and no claim is made about which class is the worst behaved here.
+
+**Cost, which is not measured.** Tracking eleven classes rather than one adds
+detector and tracker work this repository has not quantified, and its effect on
+detection accuracy is unmeasured too — the live figures in the Status table were
+all taken with `person` only. One structural fact is readable from the
+configuration, and it is not a cost figure: the model scores the whole COCO 91
+label set on every frame and `objects.track` filters afterwards, so the forward
+pass is the same one either way. That does not make the extra work free, and
+nothing here measures it.
+
+**One consequence to know about.** Because an animal is pinned on sight, a false
+positive is **permanent** — it holds `retain_indefinitely` until somebody deletes
+it, exactly like a loitering person. All ten classes stay tracked on cameras 1–3,
+as asked. Which of them misfire on a 352×288 frame, and how often, is unmeasured
+on these feeds, so no class is named here as the likely offender. If the archive
+fills with one you do not want, the fix is one line in `config/config.example.yml`
+and one in `scripts/retain.py`; the worker counts what it refused, so it will tell
+you they were arriving.
+
+`camera_4` is gated twice over: it does not track the labels in Frigate, and
+`retain.py` refuses an animal event on it before any request is made. The second
+gate does not depend on Frigate having been reconfigured.
 
 ## Controlled deletion
 
@@ -579,3 +649,8 @@ should not imply more process than it has.
 - <https://docs.frigate.video/guides/getting_started/>
 - <https://docs.frigate.video/configuration/zones/>
 - <https://docs.frigate.video/configuration/notifications/>
+### Latest live verification — 2026-10-02
+
+After applying animal tracking, `scripts/check.py` passed against the running stack: four cameras detecting, paginated archive and camera filters responding, snapshots returning JPEG, and all refusal checks holding. Retention and deletion animal-policy checks passed separately against a fake Frigate; no live animal event was used to prove pinning or deletion.
+
+Browser verification showed four 2560×1440 players running. Expanding Camera 1 produced a 1264×984 dialog and minimizing preserved its exact source; a 320px viewport had no horizontal overflow, pagination buttons on one row, and a 304×784 camera dialog closed with Escape. Snapshot preview opened in a dialog without changing the URL and Escape restored scrolling. Next set `?page=6`, reload retained that page, and Latest returned to `/`. The viewport override was reset. These are observed UI checks, not animal accuracy measurements.

@@ -30,6 +30,30 @@
 # assessment, and no model here makes one. Nothing in this file is a measured
 # accuracy claim, and no walkthrough has yet been run against it.
 #
+# Animals, cameras 1-3 only. camera_1, camera_2 and camera_3 track the ten COCO 91
+# animal classes as well as person: bird, cat, dog, horse, sheep, cow, elephant,
+# bear, zebra, giraffe. camera_4 tracks person and nothing else, by request.
+#
+# An animal is a different rule from a person, and the zones say so. An animal is
+# added to camera_N_area, which is already loitering_time 0, so it is snapshotted
+# the moment it is in frame — a stray dog does not get 60 free seconds while the
+# counter runs. The animals are deliberately NOT in camera_N_loitering: that zone
+# stays person-only, so no animal can reach the 60-second person threshold, and the
+# retention worker pins an animal on sight instead.
+#
+# The bundled SSDLite MobileNetV2 reads coco_91cl_bkgr.txt and knows nothing about
+# harm. It reports a species; "harmful" is a judgement made afterwards, not a
+# detection. Two consequences worth stating plainly:
+#   - There is no rat, mouse, rodent, snake or scorpion class in COCO 91. Those are
+#     not detectable here at all; they need a different model.
+#   - All ten classes are tracked on these three cameras because they were asked
+#     for. None of them has been seen on these feeds, so no class here is claimed to
+#     be noisier or more prone to misfire than another, and the extra tracking work
+#     and its effect on accuracy are both unmeasured.
+# Detection runs at 352x288 and 3 fps, and an animal at the edge of a frame is far
+# smaller in those pixels than a person, so misses are expected. Nothing here has
+# been measured against a real animal yet.
+#
 # Camera streams are placeholders too. Fill .env (never this file) with the real
 # RTSP URLs, passwords written raw. A camera that cannot be reached degrades on
 # its own: Frigate keeps retrying that feed while the other three carry on, and
@@ -92,6 +116,16 @@ cameras:
     objects:
       track:
         - person
+        - bird
+        - cat
+        - dog
+        - horse
+        - sheep
+        - cow
+        - elephant
+        - bear
+        - zebra
+        - giraffe
     zones:
       camera_1_area:
         # Deliberate default: every part of this view counts, so no area is
@@ -102,6 +136,16 @@ cameras:
         loitering_time: 0
         objects:
           - person
+          - bird
+          - cat
+          - dog
+          - horse
+          - sheep
+          - cow
+          - elephant
+          - bear
+          - zebra
+          - giraffe
       camera_1_loitering:
         # The same polygon as camera_1_area, with the rule that matters: 180
         # tracked in-zone frames at 3 fps, which is 60 seconds. Redraw this one
@@ -155,6 +199,16 @@ cameras:
     objects:
       track:
         - person
+        - bird
+        - cat
+        - dog
+        - horse
+        - sheep
+        - cow
+        - elephant
+        - bear
+        - zebra
+        - giraffe
     zones:
       camera_2_area:
         # Deliberate default: every part of this view counts, so no area is
@@ -165,6 +219,16 @@ cameras:
         loitering_time: 0
         objects:
           - person
+          - bird
+          - cat
+          - dog
+          - horse
+          - sheep
+          - cow
+          - elephant
+          - bear
+          - zebra
+          - giraffe
       camera_2_loitering:
         # The same polygon as camera_2_area, with the rule that matters: 180
         # tracked in-zone frames at 3 fps, which is 60 seconds. Redraw this one
@@ -215,6 +279,16 @@ cameras:
     objects:
       track:
         - person
+        - bird
+        - cat
+        - dog
+        - horse
+        - sheep
+        - cow
+        - elephant
+        - bear
+        - zebra
+        - giraffe
     zones:
       camera_3_area:
         # Deliberate default: every part of this view counts, so no area is
@@ -225,6 +299,16 @@ cameras:
         loitering_time: 0
         objects:
           - person
+          - bird
+          - cat
+          - dog
+          - horse
+          - sheep
+          - cow
+          - elephant
+          - bear
+          - zebra
+          - giraffe
       camera_3_loitering:
         # The same polygon as camera_3_area, with the rule that matters: 180
         # tracked in-zone frames at 3 fps, which is 60 seconds. Redraw this one

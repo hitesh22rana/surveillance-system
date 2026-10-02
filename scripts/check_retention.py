@@ -97,16 +97,24 @@ def unfiltered_fixture():
     and one already retained but behind the lookback, so never read at all. Every
     tag is exactly six lowercase alphanumerics, or the row would be counted as
     unaddressable instead of reaching the check it is here for.
+
+    The animal rows are the point of the last four: a cat on camera_3 and a dog on
+    camera_1 pin with no zone at all, a cat on camera_4 is refused because that
+    camera does not watch for animals, and a car is refused on both counts at once
+    because it is not a label this suite tracks.
     """
     return [
         event("qual02", "camera_1", BASE_TIME + 500),                            # 0  pins
         event("noclip", "camera_2", BASE_TIME + 490, snapshot=False),               # 1  no snapshot
-        event("cat001", "camera_3", BASE_TIME + 480, label="cat"),                 # 2  not a person
+        event("cat001", "camera_3", BASE_TIME + 480, label="cat"),                 # 2  animal, pins
         event("wrong2", "camera_4", BASE_TIME + 465, zones=["camera_1_loitering"]),  # 3  other zone
         event("nocam2", "camera_9", BASE_TIME + 460),                              # 4  no such camera
         event("kept02", "camera_1", BASE_TIME + 455, retain_indefinitely=True),     # 5  already pinned
         event("arch02", "camera_1", ANCIENT_TIME, retain_indefinitely=True),        # 6  behind the window
         *tied_group(),                                                            # 7-13  all pin
+        event("dog001", "camera_1", BASE_TIME + 445, label="dog"),                 # 14  animal, pins
+        event("cat004", "camera_4", BASE_TIME + 440, label="cat"),                 # 15  wrong camera
+        event("car001", "camera_2", BASE_TIME + 435, label="car"),                 # 16  untracked label
     ]
 
 
@@ -286,10 +294,23 @@ def check_defaults():
     assert set(retain.REQUIRED_ZONE.values()) == {f"camera_{n}_loitering" for n in range(1, 5)}, \
         f"required zones {sorted(retain.REQUIRED_ZONE.values())}"
     assert retain.TARGET_LABEL == "person", f"target label {retain.TARGET_LABEL!r}"
+    # The ten COCO 91 animal classes, in the labelmap's order, on cameras 1-3 only.
+    assert retain.ANIMAL_LABELS == (
+        "bird", "cat", "dog", "horse", "sheep", "cow",
+        "elephant", "bear", "zebra", "giraffe",
+    ), f"animal labels {retain.ANIMAL_LABELS}"
+    assert retain.ANIMAL_CAMERAS == ("camera_1", "camera_2", "camera_3"), \
+        f"animals must stay off camera_4: {retain.ANIMAL_CAMERAS}"
+    assert retain.PINNED_LABELS == ("person",) + retain.ANIMAL_LABELS, \
+        f"pinned labels {retain.PINNED_LABELS}"
+    # camera_4 must not be reachable through any animal label, or the exclusion is
+    # only a convention.
+    assert not set(retain.ANIMAL_CAMERAS) & {"camera_4"}, \
+        f"camera_4 watches for animals: {retain.ANIMAL_CAMERAS}"
     assert retain.LOOKBACK_SECONDS == 6 * 3600, \
         f"the lookback must stay the six hours Frigate keeps a snapshot {retain.LOOKBACK_SECONDS}s"
     print("ok  internal base http://frigate:5000, 30s cadence, four camera_N_loitering zones, "
-          "one person label, six hour lookback")
+          "one person label plus 10 COCO animal labels on cameras 1-3, six hour lookback")
 
 
 def check_tied_walk():
@@ -316,7 +337,8 @@ def check_cursor_shape(fake):
     expected_floor = retain.after_cutoff()
     for read in fake.reads:
         assert read["sort"] == "date_desc", f"a page was not start_time DESC: {read}"
-        assert read["has_snapshot"] == "1" and read["labels"] == "person", f"query {read}"
+        assert read["has_snapshot"] == "1" and read["labels"] == ",".join(retain.PINNED_LABELS), \
+            f"query {read}"
         assert read.get("after") is not None, f"a page was read with no lookback floor: {read}"
         assert abs(float(read["after"]) - expected_floor) < 5, \
             f"the lookback floor moved between pages of one pass: {floors(fake)}"
@@ -337,7 +359,7 @@ def check_cursor_shape(fake):
 def check_qualification():
     """One event per decision on the native fields, and two pins that fail before they stick."""
     fake = FakeFrigate(unfiltered_fixture(), filtering=False)
-    qualifying = set(ids(fake, [0, *range(7, 14)]))
+    qualifying = set(ids(fake, [0, 2, 14, *range(7, 14)]))
     refused, quiet = ids(fake, [8])[0], ids(fake, [10])[0]
     fake.refusals[refused] = 500
     fake.quiet_acks[quiet] = True
@@ -349,28 +371,30 @@ def check_qualification():
         assert f"{refused} (HTTP 500)" in text, f"the HTTP status was not reported:\n{text}"
         assert f"{quiet} (HTTP 2xx with no success:true in the reply)" in text, \
             f"success:false was not reported as a refusal:\n{text}"
-        assert "6 pinned, 1 already retained" in text, f"pass 1 pin summary:\n{text}"
-        assert "1 without a snapshot, 1 not a person, 1 outside its own loitering zone, " \
-               "1 from no configured camera" in text, f"pass 1 skip counts:\n{text}"
-        # 13 of 14 rows: the retained row behind the six hour floor was never read.
-        assert "13 unique event(s)" in text, f"the walk read rows it should not have:\n{text}"
+        assert "8 pinned, 1 already retained" in text, f"pass 1 pin summary:\n{text}"
+        assert ("1 without a snapshot, 1 not a person or a tracked animal, "
+                "1 an animal on a camera that does not watch for them, "
+                "1 outside its own loitering zone, 1 from no configured camera") in text, \
+            f"pass 1 skip counts:\n{text}"
+        # 16 of 17 rows: the retained row behind the six hour floor was never read.
+        assert "16 unique event(s)" in text, f"the walk read rows it should not have:\n{text}"
         assert sorted(fake.pinned) == sorted(qualifying - {refused, quiet}), \
             f"pinned {sorted(fake.pinned)}"
-        assert len(fake.posts) == 8, f"{len(fake.posts)} pins attempted for 8 qualifying rows"
+        assert len(fake.posts) == 10, f"{len(fake.posts)} pins attempted for 10 qualifying rows"
         assert len(fake.posts) == len(set(fake.posts)), f"an event was pinned twice: {fake.posts}"
-        for never in ids(fake, [1, 2, 3, 4, 5, 6]):
+        for never in ids(fake, [1, 3, 4, 5, 6, 15, 16]):
             assert never not in fake.posts, f"{never} was POSTed and should not have been"
         assert fake.deletes == [], f"the automated pass deleted {fake.deletes}"
-        print("ok  an unfiltered upstream: a non-person label, a snapshot-less row, a row outside "
-              "its own zone, an unknown camera and an already-retained row never POSTed, and the "
-              "row behind the six hour floor was never read")
+        print("ok  an unfiltered upstream: an untracked label, a snapshot-less row, a cat on "
+              "camera_4, a row outside its own zone, an unknown camera and an already-retained "
+              "row never POSTed, and the row behind the six hour floor was never read")
 
         second = run_retain(base, "--once")
         text2 = clean(second)
         assert second.returncode == 0, f"pass 2 exited {second.returncode}:\n{text2}"
         assert second.stdout.count("pinned") == 1, f"pass 2 pinned more than its two retries:\n{text2}"
-        assert "2 pinned" in text2 and "7 already retained" in text2, f"pass 2 summary:\n{text2}"
-        assert len(fake.posts) == 10, f"{len(fake.posts)} pins in total, expected 8 then 2"
+        assert "2 pinned" in text2 and "9 already retained" in text2, f"pass 2 summary:\n{text2}"
+        assert len(fake.posts) == 12, f"{len(fake.posts)} pins in total, expected 10 then 2"
         assert set(map(json.dumps, fake.post_bodies)) == {'{"retain_indefinitely": true}'}, \
             f"a pin call carried something other than retain_indefinitely: {fake.post_bodies}"
         assert sorted(fake.pinned) == sorted(qualifying), \
@@ -403,6 +427,46 @@ def check_zone_rule():
         assert second.returncode == 0, f"exit {second.returncode}:\n{clean(second)}"
         assert fake.pinned == [loitered], "the pinned event was pinned a second time"
         print("ok  a second pass pins nothing again, so a loitering event is pinned once")
+
+
+def check_animal_rule():
+    """An animal on cameras 1-3 is pinned on sight; on camera_4 it is not pinned at all.
+
+    The animal rows carry no zone, so this proves the pin is not the loitering rule
+    wearing an animal's label: without the on-sight branch they would be skipped.
+    """
+    events = [event(f"a{label[:3]}0{n}", camera, BASE_TIME + 500 - n, label=label)
+              for n, (label, camera) in enumerate((
+                  ("dog", "camera_1"), ("cat", "camera_2"), ("cow", "camera_3"),
+                  ("bird", "camera_4"), ("bear", "camera_4"), ("zebra", "camera_3"),
+              ))]
+    fake = FakeFrigate(events)
+    pinned_on_sight = ids(fake, [0, 1, 2, 5])
+    refused_camera = ids(fake, [3, 4])
+    assert not any(retain.pin_disqualification(row) is None for row in events[3:5]), \
+        "an animal on camera_4 qualified"
+    with serving(fake) as base:
+        result = run_retain(base, "--once")
+        text = clean(result)
+        assert result.returncode == 0, f"exit {result.returncode}:\n{text}"
+        assert sorted(fake.pinned) == sorted(pinned_on_sight), \
+            f"pinned {sorted(fake.pinned)}, expected {sorted(pinned_on_sight)}"
+        for never in refused_camera:
+            assert never not in fake.posts, f"{never} on camera_4 was POSTed"
+        assert "2 an animal on a camera that does not watch for them" in text, \
+            f"the camera-4 refusals were not counted:\n{text}"
+        print("ok  every animal label on cameras 1-3 pins with no zone at all, and the same "
+              "labels on camera_4 are refused before any POST")
+        # And the archive/delete gate agrees, or a pinned row could exist that the
+        # operator can never find or remove.
+        for row in events[:3]:
+            assert retain.disqualification(row) is None, \
+                f"a pinned animal row was not listable or deletable: {row['id']}"
+        for row in events[3:5]:
+            assert retain.disqualification(row) is not None, \
+                f"a camera_4 animal row reached the archive or the delete path: {row['id']}"
+        print("ok  the listing and deletion gate accepts the pinned animal rows and refuses "
+              "the camera_4 ones, so nothing pinned is unreachable and nothing unpinned is listed")
 
 
 def check_page_cap():
@@ -471,6 +535,7 @@ def main():
     check_defaults()
     check_cursor_shape(check_tied_walk())
     check_zone_rule()
+    check_animal_rule()
     check_qualification()
     check_page_cap()
     check_cli_positivity()
