@@ -325,31 +325,53 @@ h1.section__title {
   min-width: 0;
 }
 
+/* The main streams are 2560×1440, which is 16:9, so the frame is reserved at
+ * 16:9 and the whole frame is fitted into it: a card is not a crop of the
+ * picture. Event thumbnails below keep the snapshot crop ratio instead, because
+ * a small thumbnail reads better filled. */
 .feed__frame {
   position: relative;
-  aspect-ratio: var(--ratio-feed);
+  aspect-ratio: 16 / 9;
   overflow: hidden;
   border: 1px solid var(--color-rule);
   border-radius: var(--radius-md);
   background: var(--color-paper-3);
 }
 
-.feed__img {
+/* The player element and the <video> it builds are both filled to the frame, so
+ * the reserved geometry holds and nothing shifts when a frame lands. The video
+ * is set by the player, not by markup here. */
+.feed__frame > zone-live,
+.feed__frame video {
   position: absolute;
   inset: 0;
+  display: block;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  display: block;
 }
 
+.feed__frame video {
+  object-fit: contain;
+}
+
+/* With no picture arriving the frame goes black rather than holding the last
+ * frame, which would read as live. The reason is in the placeholder over it. */
+.feed__frame[data-video="off"] {
+  background: var(--color-graphite);
+}
+
+/* Opaque and above the video it covers: the player element stays connected and
+ * visible while it starts, so the blank picture is hidden with this layer
+ * rather than by hiding the player itself. */
 .feed__placeholder {
   position: absolute;
   inset: 0;
+  z-index: var(--z-raised);
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--space-sm);
+  background: var(--color-graphite);
   color: var(--color-muted);
   font-size: var(--text-sm);
   text-align: center;
@@ -378,6 +400,12 @@ h1.section__title {
   font-variant-numeric: tabular-nums;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+/* Two independent readouts per card: the picture and the detector. Neither
+ * borrows the other's tick. */
+.feed__detect {
+  color: var(--color-faint);
 }
 
 .feed__stamp {
@@ -413,7 +441,7 @@ h1.section__title {
 
 .readout-strip {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   border: 1px solid var(--color-rule-2);
   border-radius: var(--radius-lg);
   overflow: hidden;
@@ -563,6 +591,29 @@ h1.section__title {
   letter-spacing: 0.04em;
 }
 
+/* A fact about retention, stated on the row, and only on a row whose event
+ * carries retain_indefinitely. Not a control: this page has no write path, so
+ * the badge is inert by construction. */
+.event__kept {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.0625rem var(--space-2xs);
+  border: 1px solid var(--color-accent-line);
+  border-radius: var(--radius-pill);
+  background: var(--color-accent-quiet);
+  color: var(--color-ink);
+  font-family: var(--font-readout);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The same words in the section lede stay body text on purpose. Painted as a
+ * badge there they claimed every snapshot on the page is retained, which is a
+ * per-event flag this page cannot assume; as text they read as the label, and
+ * the sentence after it says what the flag means. */
+
 .events__empty {
   padding: var(--space-lg) var(--space-md);
   border: 1px dashed var(--color-rule-2);
@@ -599,6 +650,22 @@ h1.section__title {
 }
 
 /* -------------------------------------------------------- responsive ----- */
+
+/* Declared before the narrower breakpoint below, so the one-column rules there
+   win on source order at equal specificity. */
+@media (max-width: 64rem) {
+  .readout-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .readout-strip__item:nth-child(2n) {
+    border-inline-start: 0;
+  }
+
+  .readout-strip__item:nth-child(n + 3) {
+    border-top: 1px solid var(--color-rule);
+  }
+}
 
 @media (max-width: 48rem) {
   .feeds {

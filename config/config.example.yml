@@ -41,6 +41,22 @@ detect:
   height: 288
   fps: 3
 
+# go2rtc restreams the four main channels, and each camera's live: block below
+# names one of them. Detection does not use these: the detect inputs further down
+# stay on the low channel at 3 fps, so a browser watching a main channel cannot
+# change what the detectors cost.
+#
+# These four URLs are the URL-encoded ones from .env, and .env says why they are
+# encoded differently from the detection URLs. go2rtc substitutes them into an
+# RTSP source and applies no encoder of its own. If a camera's main channel is
+# unreachable, go2rtc retries it and the other three keep streaming.
+go2rtc:
+  streams:
+    camera_1_main: ['{FRIGATE_CAMERA_1_MAIN_RTSP_URL}']
+    camera_2_main: ['{FRIGATE_CAMERA_2_MAIN_RTSP_URL}']
+    camera_3_main: ['{FRIGATE_CAMERA_3_MAIN_RTSP_URL}']
+    camera_4_main: ['{FRIGATE_CAMERA_4_MAIN_RTSP_URL}']
+
 cameras:
   camera_1:
     ffmpeg:
@@ -77,9 +93,15 @@ cameras:
       required_zones:
         - camera_1_area
       retain:
-        default: 3
+        # 6 hours, in days. Short on purpose: the retention worker pins the
+        # events a person actually stood in the zone for, and a long window here
+        # would just hide an event the worker never saw.
+        default: 0.25
     record:
       enabled: false
+    live:
+      streams:
+        Main: camera_1_main
 
   camera_2:
     ffmpeg:
@@ -116,9 +138,15 @@ cameras:
       required_zones:
         - camera_2_area
       retain:
-        default: 3
+        # 6 hours, in days. Short on purpose: the retention worker pins the
+        # events a person actually stood in the zone for, and a long window here
+        # would just hide an event the worker never saw.
+        default: 0.25
     record:
       enabled: false
+    live:
+      streams:
+        Main: camera_2_main
 
   camera_3:
     ffmpeg:
@@ -155,9 +183,15 @@ cameras:
       required_zones:
         - camera_3_area
       retain:
-        default: 3
+        # 6 hours, in days. Short on purpose: the retention worker pins the
+        # events a person actually stood in the zone for, and a long window here
+        # would just hide an event the worker never saw.
+        default: 0.25
     record:
       enabled: false
+    live:
+      streams:
+        Main: camera_3_main
 
   camera_4:
     ffmpeg:
@@ -194,6 +228,12 @@ cameras:
       required_zones:
         - camera_4_area
       retain:
-        default: 3
+        # 6 hours, in days. Short on purpose: the retention worker pins the
+        # events a person actually stood in the zone for, and a long window here
+        # would just hide an event the worker never saw.
+        default: 0.25
     record:
       enabled: false
+    live:
+      streams:
+        Main: camera_4_main

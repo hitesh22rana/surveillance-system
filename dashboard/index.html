@@ -7,7 +7,7 @@
     <title>Zone Console — camera overview</title>
     <meta
       name="description"
-      content="Local camera overview: current status for four cameras and recent person detections in monitored areas."
+      content="Local camera overview: live main-stream video for four cameras and recent person detections in monitored areas."
     />
     <meta name="robots" content="noindex, nofollow" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -48,64 +48,78 @@
 
       <section class="section" aria-labelledby="feeds-heading">
         <div class="section__head">
-          <p class="eyebrow">Still pictures, not live video</p>
+          <p class="eyebrow">Live · 2560×1440 · 25 fps source</p>
           <h1 class="section__title" id="feeds-heading">Camera overview</h1>
-          <p class="section__lede">Views update every two seconds.</p>
+          <p class="section__lede">
+            Full-resolution live video. Detection runs separately at about 3 FPS.
+          </p>
         </div>
 
         <ul class="feeds" id="feeds">
           <li class="feed" data-camera="camera_1">
-            <div class="feed__frame">
-              <img class="feed__img" alt="Latest picture from Camera 1" hidden />
-              <p class="feed__placeholder">Waiting for the first picture</p>
+            <div class="feed__frame" data-video="off">
+              <p class="feed__placeholder">Loading the live player</p>
             </div>
             <div class="feed__meta">
               <h2 class="feed__name">Camera 1</h2>
-              <p class="readout feed__status">
+              <p class="readout feed__status feed__live">
                 <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__status-text">no data</span>
+                <span class="feed__live-text">live &middot; starting</span>
+              </p>
+              <p class="readout feed__status feed__detect">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span class="feed__detect-text">detector &middot; no data</span>
               </p>
               <p class="readout feed__stamp">&mdash;</p>
             </div>
           </li>
           <li class="feed" data-camera="camera_2">
-            <div class="feed__frame">
-              <img class="feed__img" alt="Latest picture from Camera 2" hidden />
-              <p class="feed__placeholder">Waiting for the first picture</p>
+            <div class="feed__frame" data-video="off">
+              <p class="feed__placeholder">Loading the live player</p>
             </div>
             <div class="feed__meta">
               <h2 class="feed__name">Camera 2</h2>
-              <p class="readout feed__status">
+              <p class="readout feed__status feed__live">
                 <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__status-text">no data</span>
+                <span class="feed__live-text">live &middot; starting</span>
+              </p>
+              <p class="readout feed__status feed__detect">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span class="feed__detect-text">detector &middot; no data</span>
               </p>
               <p class="readout feed__stamp">&mdash;</p>
             </div>
           </li>
           <li class="feed" data-camera="camera_3">
-            <div class="feed__frame">
-              <img class="feed__img" alt="Latest picture from Camera 3" hidden />
-              <p class="feed__placeholder">Waiting for the first picture</p>
+            <div class="feed__frame" data-video="off">
+              <p class="feed__placeholder">Loading the live player</p>
             </div>
             <div class="feed__meta">
               <h2 class="feed__name">Camera 3</h2>
-              <p class="readout feed__status">
+              <p class="readout feed__status feed__live">
                 <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__status-text">no data</span>
+                <span class="feed__live-text">live &middot; starting</span>
+              </p>
+              <p class="readout feed__status feed__detect">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span class="feed__detect-text">detector &middot; no data</span>
               </p>
               <p class="readout feed__stamp">&mdash;</p>
             </div>
           </li>
           <li class="feed" data-camera="camera_4">
-            <div class="feed__frame">
-              <img class="feed__img" alt="Latest picture from Camera 4" hidden />
-              <p class="feed__placeholder">Waiting for the first picture</p>
+            <div class="feed__frame" data-video="off">
+              <p class="feed__placeholder">Loading the live player</p>
             </div>
             <div class="feed__meta">
               <h2 class="feed__name">Camera 4</h2>
-              <p class="readout feed__status">
+              <p class="readout feed__status feed__live">
                 <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__status-text">no data</span>
+                <span class="feed__live-text">live &middot; starting</span>
+              </p>
+              <p class="readout feed__status feed__detect">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span class="feed__detect-text">detector &middot; no data</span>
               </p>
               <p class="readout feed__stamp">&mdash;</p>
             </div>
@@ -114,11 +128,15 @@
 
         <dl class="readout-strip" id="readout-strip">
           <div class="readout-strip__item">
-            <dt>Cameras watching</dt>
-            <dd id="stat-online">&mdash;</dd>
+            <dt>Live views</dt>
+            <dd id="stat-live">&mdash;</dd>
           </div>
           <div class="readout-strip__item">
-            <dt>Detection speed</dt>
+            <dt>Detector rate &middot; fps</dt>
+            <dd id="stat-detect-rate">&mdash;</dd>
+          </div>
+          <div class="readout-strip__item">
+            <dt>Detector speed</dt>
             <dd id="stat-inference">&mdash;</dd>
           </div>
           <div class="readout-strip__item">
@@ -131,7 +149,10 @@
       <section class="section" aria-labelledby="events-heading">
         <div class="section__head">
           <h2 class="section__title" id="events-heading">Recent zone detections</h2>
-          <p class="section__lede">People seen in monitored areas.</p>
+          <p class="section__lede">
+            People seen in monitored areas. Flagged snapshots are kept until you delete them after
+            review.
+          </p>
         </div>
 
         <div class="filters" id="filters" role="group" aria-label="Filter detections by camera">
@@ -166,7 +187,7 @@
         <span aria-hidden="true">·</span>
         <span>Local prototype</span>
         <span aria-hidden="true">·</span>
-        <span>Person detection</span>
+        <span>Read-only view</span>
         <span aria-hidden="true">·</span>
         <span>Email alerts not enabled</span>
       </p>
@@ -181,12 +202,13 @@
           <p class="event__head">
             <span class="event__camera"></span>
             <span class="event__zone"></span>
+            <span class="event__kept" hidden>Kept for review</span>
           </p>
           <p class="readout event__time"></p>
         </div>
       </li>
     </template>
 
-    <script src="/app.js" defer></script>
+    <script type="module" src="/app.js"></script>
   </body>
 </html>

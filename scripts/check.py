@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """Live HTTP smoke check for the Zone Console proxy (stdlib asserts only).
 
-Test-audit rationale: an observable credential-leak regression guard. Frigate's
-stats history embeds cpu_usages.cmdline (RTSP URLs with camera passwords), so
-serving raw stats, forwarding a client's ?keys=, or opening /api/config leaks
-them to any page in the browser. No internals mirrored, nothing else covers the
-server-side key allowlist, no production test seams needed. A cold Frigate FAILS
-rather than skipping, so this never exits 0 while validation is unperformed.
+Test-audit rationale: an observable credential-leak regression guard, and a guard on
+the two boundaries a browser actually touches. Frigate's stats history embeds
+cpu_usages.cmdline (RTSP URLs with camera passwords), and the live player is
+go2rtc's own bundled script, so serving raw stats, forwarding a client's ?keys=,
+opening /api/config, or letting a URL reach the page with userinfo leaks
+credentials to any page in the browser. No internals mirrored, nothing else
+covers the server-side key allowlist or the pinned live paths, no production test
+seams needed. A cold Frigate FAILS rather than skipping, so this never exits 0
+while validation is unperformed.
+
+This is a transport check. It does not open a WebSocket and cannot prove that any
+frame was decoded: live playback is recorded in docs/validation.md from a
+browser session, not from this script.
 
     python3 scripts/check.py [--base http://127.0.0.1:8088]
 """
@@ -20,7 +27,14 @@ import urllib.error
 import urllib.request
 
 CAMERAS = ("camera_1", "camera_2", "camera_3", "camera_4")
-DENIED = ("/api/config/raw", "/api/stats/history", "/api/logs", "/api/restart", "/nginx.conf", "/api/camera_5/latest.jpg")
+DENIED = ("/api/config/raw", "/api/stats/history", "/api/logs", "/api/restart", "/nginx.conf",
+          "/api/camera_5/latest.jpg",
+          # go2rtc's own surface: the proxy pins one script and four live paths, so
+          # its config, its stream list, its control WebSocket and any other camera
+          # must all be unreachable from here.
+          "/api/streams", "/api/ws", "/api/go2rtc/streams",
+          "/live/camera_5", "/live/camera_1/extra")
+WRITES = ("/api/stats", "/live/camera_1")
 FORBIDDEN = ("cmdline", "cpu_usages", "rtsp://")
 ALLOWED = {"cameras": {"camera_fps", "process_fps", "detection_enabled"},
            "detectors": {"inference_speed"}}
@@ -28,6 +42,14 @@ ALLOWED = {"cameras": {"camera_fps", "process_fps", "detection_enabled"},
 # scalar, not a per-name object map, so its fields get their own allowlist and check.
 SCALARS = {"last_updated"}
 EVENT_ID = re.compile(r"^[0-9]+(\.[0-9]+)?-[a-z0-9]{6}$")  # native id, not the old 16-hex one
+REQUIRED_ZONE = {cam: f"{cam}_area" for cam in CAMERAS}
+# Only an rtsp:// URL that carries userinfo is a leak. A bare rtsp:// mention in a
+# comment or a library's own docs is not a secret and must not fail this check.
+RTSP_URL = re.compile(r"rtsp://\S+")
+RTSP_USERINFO = re.compile(r"^rtsp://[^/@\s]+@")
+# The worker polls every 30 s, so an event that only just ended can still be
+# unpinned. Only rows that ended longer ago than one of its cycles are asserted.
+SETTLED_S = 60
 
 
 def get(base, path, method="GET"):
@@ -45,20 +67,50 @@ def main():
     ap.add_argument("--base", default="http://127.0.0.1:8088", help="dashboard base URL")
     base = ap.parse_args().base
     print(f"checking {base}")
-    status, headers, _b = get(base, "/")
+    status, headers, index = get(base, "/")
     assert status == 200, f"root: HTTP {status}"
-    frame = re.search(r"frame-ancestors ([^;]+)", headers.get("content-security-policy", ""))
-    assert frame and frame.group(1) in ("'self'", "'none'"), f"frame-ancestors not self-scoped in {headers.get('content-security-policy')!r}"
+    csp = headers.get("content-security-policy", "")
+    frame = re.search(r"frame-ancestors ([^;]+)", csp)
+    assert frame and frame.group(1) in ("'self'", "'none'"), f"frame-ancestors not self-scoped in {csp!r}"
+    # The live player's MediaSource is attached to a blob: URL, so media-src has to
+    # allow blob: and nothing else. A missing blob: is a live view that can never
+    # start; an extra source here is a widened surface.
+    media = re.search(r"media-src ([^;]+)", csp)
+    assert media and set(media.group(1).split()) == {"'self'", "blob:"}, \
+        f"media-src is {media.group(1) if media else None!r}, expected exactly 'self' and blob:"
     assert headers.get("referrer-policy", "").lower() == "no-referrer" and headers.get("x-content-type-options", "").lower() == "nosniff", f"referrer-policy {headers.get('referrer-policy')!r} / nosniff {headers.get('x-content-type-options')!r}"
-    print(f"ok  root 200; frame-ancestors {frame.group(1)}, referrer no-referrer, nosniff")
+    print(f"ok  root 200; frame-ancestors {frame.group(1)}, media-src 'self' blob:, referrer no-referrer, nosniff")
 
     for path in DENIED:
         status, _h, _b = get(base, path)
         assert status in (403, 404, 405), f"{path}: HTTP {status}, expected a denial"
-    for method in ("POST", "DELETE"):
-        status, _h, _b = get(base, "/api/stats", method=method)
-        assert status in (403, 405), f"{method} /api/stats: HTTP {status}, expected 403 or 405"
-    print(f"ok  {len(DENIED)} forbidden paths denied; POST and DELETE /api/stats refused with 403/405")
+    for path in WRITES:
+        for method in ("POST", "DELETE"):
+            status, _h, _b = get(base, path, method=method)
+            assert status in (403, 405), f"{method} {path}: HTTP {status}, expected 403 or 405"
+    print(f"ok  {len(DENIED)} forbidden paths denied; POST and DELETE refused on {', '.join(WRITES)}")
+
+    # The player itself: the copy go2rtc ships, served as a module, is what the page
+    # imports. Anything served here is code the browser runs, so it is also checked
+    # for credentials. No rtsp:// URL may arrive with userinfo; a bare rtsp://
+    # mention is not a secret.
+    assets = {"index.html": index.decode("utf-8", "replace")}
+    status, headers, body = get(base, "/app.js")
+    assert status == 200, f"/app.js: HTTP {status}"
+    assets["app.js"] = body.decode("utf-8", "replace")
+    status, headers, body = get(base, "/video-rtc.js")
+    assert status == 200, f"/video-rtc.js: HTTP {status}"
+    ctype = headers.get("content-type", "").lower()
+    assert "javascript" in ctype, f"/video-rtc.js content-type {ctype!r}"
+    player = body.decode("utf-8", "replace")
+    assets["video-rtc.js"] = player
+    assert "VideoRTC" in player and re.search(r"\bexport\b", player), \
+        "/video-rtc.js is not the bundled VideoRTC module the page imports"
+    for name, text in assets.items():
+        leaked = [url for url in RTSP_URL.findall(text) if RTSP_USERINFO.match(url)]
+        assert not leaked, f"{name} serves rtsp:// with credentials: {leaked[:2]}"
+    print(f"ok  /video-rtc.js 200 {ctype.split(';')[0]} and is the VideoRTC module; "
+          f"{len(assets)} served assets carry no rtsp:// credential")
 
     latest = None
     for label, path in (("plain", "/api/stats"), ("override", "/api/stats?keys=cpu_usages.cmdline")):
@@ -107,10 +159,31 @@ def main():
         assert status == 200 and body[:2] == b"\xff\xd8", f"snapshot {eid}: HTTP {status}, not a JPEG"
         print(f"ok  event {eid} snapshot 200 JPEG")
 
+    # Retention, as the browser sees it: a snapshot a person triggered in a camera's
+    # own zone must be flagged kept, or the periodic cleanup would take it first.
+    # What this proves is that the flag reached the page, not that the worker set
+    # it: the worker pins on its own cadence, and until it has run there is nothing
+    # here to assert.
+    now = time.time()
+    settled = [e for e in events
+               if isinstance(e.get("end_time"), (int, float))
+               and not isinstance(e.get("end_time"), bool)
+               and now - e["end_time"] >= SETTLED_S
+               and REQUIRED_ZONE.get(e.get("camera")) in (e.get("zones") or [])]
+    if not settled:
+        print(f"NOT TESTED  retained snapshots: no required-zone event ended over {SETTLED_S}s ago")
+    else:
+        unpinned = [e["id"] for e in settled if e.get("retain_indefinitely") not in (True, 1)]
+        assert not unpinned, f"{len(unpinned)} settled required-zone event(s) are not retained: {unpinned[:3]}"
+        print(f"ok  all {len(settled)} settled required-zone event(s) are flagged kept for review")
+
     for cam in CAMERAS:
         status, _h, body = get(base, f"/api/{cam}/latest.jpg")
         assert status == 200 and body[:2] == b"\xff\xd8", f"{cam}/latest.jpg: HTTP {status}, not a JPEG"
-    print(f"ok  all {len(CAMERAS)} latest.jpg previews 200 JPEG\n\nPASS  every assertion held")
+    print(f"ok  all {len(CAMERAS)} latest.jpg previews 200 JPEG")
+    print("note  /live/ is a WebSocket upgrade this script never opens: playback was seen in a "
+          "browser, and it is recorded there, not proved by this run")
+    print("\nPASS  every assertion held")
     return 0
 
 

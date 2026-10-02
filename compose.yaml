@@ -36,3 +36,28 @@ services:
     # No default network exposure beyond the two loopback mappings above.
     security_opt:
       - no-new-privileges:true
+
+  # Retention worker. Pins the person events that entered a camera's own zone so
+  # Frigate's snapshot pruning cannot take them first. Standard library only, so
+  # the image is the bare interpreter: nothing to install, nothing to audit.
+  retention:
+    image: python:3.13-alpine
+    restart: unless-stopped
+    depends_on:
+      - frigate
+    # The worker is one read-only file. It writes nothing and needs nothing but
+    # the internal API, which is a literal default rather than an injected value.
+    read_only: true
+    volumes:
+      - ./scripts/retain.py:/app/retain.py:ro
+    # The interpreter has nothing to put in /tmp, so this tmpfs stays empty. It is
+    # here because read_only turns any stray write into a crash, and a worker that
+    # crash-loops behind a read-only filesystem retains nothing at all.
+    tmpfs:
+      - /tmp
+    command: ["python3", "-u", "/app/retain.py", "--api-base", "http://frigate:5000"]
+    # No ports and no env_file: it holds no camera credential, and the only
+    # upstream it can reach is Frigate's internal API, which compose never
+    # publishes. Keep it that way — nothing here may ever hold a .env value.
+    security_opt:
+      - no-new-privileges:true
