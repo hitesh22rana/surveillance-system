@@ -1,4 +1,4 @@
-# Zone Console
+# Surveillance Console
 
 A four-camera Frigate prototype with a small read-only dashboard. The one thing
 it does: detect a person loitering in a named per-camera zone, then snapshot it.
@@ -274,8 +274,8 @@ What it deliberately does not do:
 - Frigate's API port 5000 is never published. nginx reaches it on the internal
   Docker network as `frigate:5000`, and go2rtc as `frigate:1984`.
 
-Zones are drawn in Frigate's own UI, not here. The dashboard links to it, and
-older archives live there too.
+Zones are drawn in Frigate's own UI, not here. The dashboard does not link to it:
+open `127.0.0.1:8971` directly to draw zones or browse older archives.
 
 Recorder channels versus individual feeds: both are supported. Pointing all four
 `FRIGATE_CAMERA_*_RTSP_URL` values at channels 1–4 of one recorder is four

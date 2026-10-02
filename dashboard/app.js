@@ -1,4 +1,4 @@
-/* Zone Console — read-only view of four cameras.
+/* Surveillance Console — read-only view of four cameras.
  *
  * Rules this file follows on purpose:
  *   - Every value shown is read from the camera service or counted from what it

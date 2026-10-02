@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live HTTP smoke check for the Zone Console proxy (stdlib asserts only).
+"""Live HTTP smoke check for the Surveillance Console proxy (stdlib asserts only).
 
 Test-audit rationale: an observable credential-leak regression guard, and a guard on
 the two boundaries a browser actually touches. Frigate's stats history embeds
