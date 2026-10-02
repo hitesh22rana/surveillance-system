@@ -1,0 +1,9 @@
+# Build context allowlist: ignore everything, then re-include only what
+# Dockerfile.fighting needs. Anything new stays out until it is listed here.
+*
+!Dockerfile.fighting
+!requirements-fighting.txt
+!scripts
+scripts/*
+!scripts/fighting.py
+!scripts/retain.py

@@ -1,0 +1,51 @@
+# The experimental fighting worker.
+#
+# Python 3.11 slim, the four pinned packages in requirements-fighting.txt, and the
+# two read-only scripts. Nothing else is installed and nothing is downloaded: there
+# is no torchvision, no OpenCV and no ffmpeg, because the only images this worker
+# ever reads are the JPEGs Frigate already publishes and the only clip it ever scores
+# is those 16 frames in memory.
+#
+# The model files are not in this image and are not in Git. Root provisions them
+# into .models/fighting, which compose mounts read-only at /models/fighting. The
+# worker refuses to start scoring without them and never reaches for the network.
+#
+# No EXPOSE: compose publishes no port for this service at all. nginx reaches the
+# status read as fighting:8091 on the internal network only.
+#
+# The image sets the hub offline and telemetry off, so even a library that tried to
+# reach out would find nothing to reach and nowhere to report to. Every cache it
+# might want is under /tmp, which is the tmpfs compose mounts and the root filesystem
+# is read-only anyway.
+FROM python:3.11-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    OMP_NUM_THREADS=2 \
+    MKL_NUM_THREADS=2 \
+    HF_HUB_OFFLINE=1 \
+    HF_DATASETS_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_HUB_DISABLE_IMPLICIT_TOKEN=1 \
+    DO_NOT_TRACK=1 \
+    HF_HOME=/tmp/hf \
+    TORCH_HOME=/tmp/torch \
+    XDG_CACHE_HOME=/tmp/cache
+
+WORKDIR /app
+
+# The only package install this image ever does. torch is the CPU wheel for this
+# host's architecture, about 104 MB, and there is no CUDA in it.
+COPY requirements-fighting.txt /app/requirements-fighting.txt
+RUN pip install --no-cache-dir -r /app/requirements-fighting.txt
+
+# The worker imports the retention worker for its Frigate client, its archive walk,
+# its id and time checks, its keep and its refusals, so the one walker in this
+# project stays the one that already exists.
+COPY scripts/retain.py /app/retain.py
+COPY scripts/fighting.py /app/fighting.py
+
+CMD ["python3", "-u", "/app/fighting.py"]

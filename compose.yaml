@@ -77,6 +77,56 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # Experimental, and separate from everything above: cameras 2 and 3 only, running
+  # whatever anybody has armed, so Home and Away do not reach it and no file can
+  # switch it off. It looks at the whole frame of those two rooms three times a
+  # second in memory and asks one small local VideoMAE classifier whether a 16 frame
+  # clip looks violent. Two consecutive windows above the threshold label the person
+  # events overlapping that interval possible_fighting and pin them, exactly as the
+  # retention worker pins, so the archive and the operator's own deletion path see
+  # these snapshots like any other. It can only add: no DELETE, no un-pin, no
+  # configuration change, no synthetic event. docs/fighting.md says what it cannot do.
+  fighting:
+    build:
+      context: .
+      dockerfile: Dockerfile.fighting
+    image: surveillance-fighting:local
+    restart: unless-stopped
+    depends_on:
+      - frigate
+    # The worker's root filesystem stays read-only and every capability is dropped.
+    # The only thing it writes is its pending intervals, in the named volume below.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # One model on two CPU threads, scored every 5.3 seconds per camera. Anything
+    # slower than this falls behind its own capture rate and drops windows rather
+    # than growing, so this is a ceiling rather than a reservation.
+    cpus: 2
+    mem_limit: 2g
+    volumes:
+      # The model, read-only, mounted from a directory that is not in Git and that
+      # root provisions once. Nothing is downloaded at runtime, ever.
+      - ./.models/fighting:/models/fighting:ro
+      # Candidate intervals waiting to be matched: a camera, four numbers and the
+      # version, forty rows at most. No frame, no event id, no credential.
+      - fighting-state:/state
+    # The interpreter and torch both want a scratch directory; this tmpfs is the
+    # only writable path besides /state.
+    tmpfs:
+      - /tmp
+    # No ports and no env_file: it holds no camera credential, and the only upstreams
+    # it can reach are Frigate's internal API, which compose never publishes, and its
+    # own loopback listener, which nginx reaches as fighting:8091 on the internal
+    # network and nothing else can.
+    command: ["python3", "-u", "/app/fighting.py", "--api-base", "http://frigate:5000",
+              "--model-dir", "/models/fighting", "--listen", "0.0.0.0:8091"]
+
 volumes:
   # The retention worker's arming, nothing else.
   retention-state:
+
+  # The fighting worker's candidate intervals waiting to be matched, nothing else.
+  fighting-state:

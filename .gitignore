@@ -15,3 +15,10 @@ captures/
 *.mp4
 *.jpg
 __pycache__/
+
+# The fighting worker's model weights and the environment they are built in.
+# Root provisions .models/fighting from outside this repository; the weights are
+# hundreds of megabytes, the environment is machine specific, and neither is ever
+# something a commit should carry.
+.models/
+.venv-fighting/

@@ -1,0 +1,14 @@
+# The experimental fighting worker, pinned to the versions root verified on this host:
+# torch 2.9.1, transformers 5.8.1, Pillow 12.0.0 and numpy 2.3.5.
+#
+# transformers 5.8.1 specifically. Version 4.57.6 quietly dropped the trained biases
+# of this architecture, so its weights do not load cleanly and every score from it is
+# meaningless. The worker refuses to score if one weight is missing, unexpected or
+# mismatched, which is what caught that.
+#
+# torch is the CPU build for linux/arm64 on this host, about 104 MB. There is no CUDA
+# wheel here and the worker runs on two CPU threads.
+torch==2.9.1
+transformers==5.8.1
+pillow==12.0.0
+numpy==2.3.5
