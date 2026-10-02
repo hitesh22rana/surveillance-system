@@ -48,6 +48,17 @@ what it means to delete. No path or query of the request is ever forwarded
 upstream: each endpoint builds its own upstream call from literals, validated ids
 and validated filters.
 
+The paginated archive takes an optional camera filter and an optional review
+filter beside it, and both are applied before the page is cut, so total and pages
+always describe the rows actually on offer. The review filter is the one true
+thing about retention anywhere in this project: it is Frigate's own
+retain_indefinitely flag and nothing else, so a kept record is a kept record
+however this suite came to keep it - a person seen while its camera was armed, an
+animal on sight, a record left over from the removed 60 second rule, and any
+class added to that set later. It reads no label and no arming state, so it cannot
+go stale when the policy changes. The count behind the archive-wide deletion stays
+the whole archive whatever this read was filtered to.
+
 A camera may be armed only when Frigate's own /api/config reports the zone that
 camera needs - person-only on the two restricted polygons, and carrying person on the
 full-frame areas camera_2 and camera_3 already track their animals in - at
@@ -811,6 +822,10 @@ MAX_DELETE_IDS = 1000
 MAX_BODY_BYTES = 64 * 1024
 EVENTS_PAGE_SIZE = 25  # rows per archive page, fixed so a page number always means this count
 CAMERA_FILTERS = ("all",) + CAMERAS  # "all" is the default; the rest are the configured cameras
+# The review scope of the archive read. "kept" is exactly the rows carrying
+# retain_indefinitely true: the whole of what this suite has kept, however it came
+# to keep it, and nothing classified by label, zone or armed mode.
+REVIEW_FILTERS = ("all", "kept")  # "all" is the default
 MAX_PAGE_DIGITS = 9  # past any archive, so a longer run of digits is a page past the last
 
 
@@ -882,6 +897,11 @@ def select_archive(api, cutoff, page_size, max_pages):
     an upstream bound that could drift between the count and the deletion.
     PassFailed means the walk never reached the end of the list, and the caller
     must then delete nothing at all.
+
+    Nothing the archive read was filtered to reaches here. This is the whole
+    archive on every camera whatever camera or review scope the browser happens to
+    be showing, so the number an operator is shown is the number a deletion would
+    reach and never a filtered subset of it.
     """
     events, walk = walk_events(api, 0.0, page_size, max_pages)
     chosen = []
@@ -915,33 +935,43 @@ def page_number(value):
 
 
 def events_filters(query):
-    """(page, camera) from the request's own query, or Refused.
+    """(page, camera, review) from the request's own query, or Refused.
 
-    Exactly two optional parameters, each at most once, and nothing else. A repeat, an
-    unknown name, a blank, a page that is not a positive whole number and a camera that
-    is not "all" or one of the four configured cameras are all refused here, before a
-    single upstream request is made, and none of the client's own text is echoed back.
+    Exactly three optional parameters, each at most once, and nothing else. A repeat, an
+    unknown name, a blank, a page that is not a positive whole number, a camera that is
+    not "all" or one of the four configured cameras and a review that is not "all" or
+    "kept" are all refused here, before a single upstream request is made, and none of
+    the client's own text is echoed back.
     """
     for key, values in query.items():
-        if key not in ("page", "camera"):
-            raise Refused(400, "send only page and camera, each at most once")
+        if key not in ("page", "camera", "review"):
+            raise Refused(400, "send only page, camera and review, each at most once")
         if len(values) != 1:
             raise Refused(400, f"{key} was sent more than once")
     page = page_number(query.get("page", ["1"])[0])
     camera = query.get("camera", ["all"])[0]
     if camera not in CAMERA_FILTERS:
         raise Refused(400, f"camera must be all or one of {', '.join(CAMERAS)}")
-    return page, camera
+    review = query.get("review", ["all"])[0]
+    if review not in REVIEW_FILTERS:
+        raise Refused(400, "review must be all or kept")
+    return page, camera, review
 
 
-def select_events(api, page, camera, page_size, max_pages):
+def select_events(api, page, camera, review, page_size, max_pages):
     """{events, page, page_size, total, pages}: one page of the archive, or PassFailed.
 
     The rows are this suite's own saved person snapshots on a configured camera, which is
     the same set select_archive counts, so this can never offer an id the summary would
     not or hide one it would. Newest first, and start_time DESC then id DESC, so two rows
-    sharing a start_time still have one order. The camera filter is applied here, before
-    the page is cut, so total and pages always describe the filtered set.
+    sharing a start_time still have one order. Both filters are applied here, before the
+    page is cut, so total and pages always describe the filtered set and the two combine.
+
+    The review filter is retain_indefinitely true and nothing else: one flag the upstream
+    reports on the row. It is deliberately not a label list, a zone list or a read of the
+    armed state, so it keeps meaning what "kept" means after the policy changes, and a
+    record this suite no longer has a rule for is still in the kept view. is True rather
+    than truthiness, because a string and a number are not a retention decision.
 
     A page past the last is clamped to the last rather than refused, because a dashboard
     that was one page behind after rows were deleted asks for a page that is gone and
@@ -952,6 +982,8 @@ def select_events(api, page, camera, page_size, max_pages):
     rows = [event for event in events.values() if disqualification(event) is None]
     if camera != "all":
         rows = [event for event in rows if event.get("camera") == camera]
+    if review == "kept":
+        rows = [event for event in rows if event.get("retain_indefinitely") is True]
     # Every row here arrived through native_id and start_time, so both keys are present.
     rows.sort(key=lambda event: (start_time(event), event["id"]), reverse=True)
     total = len(rows)
@@ -1144,6 +1176,14 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                     raise Refused(405, "this endpoint answers GET only")
                 return self._json(200, self._events(parsed.query))
             if path == DELETE_PATH:
+                # No query string on any method, for the same reason the entry path
+                # takes none: the scope of a delete comes from the validated body and
+                # from nothing else. With a review scope in the read's query, an
+                # argument here would be a second way to ask for a narrower delete than
+                # the one the confirmation described, so it is refused rather than
+                # quietly dropped by the proxy in front.
+                if parsed.query:
+                    raise Refused(400, "this endpoint takes no query string")
                 if method != "POST":
                     raise Refused(405, "this endpoint answers POST only")
                 return self._json(200, self._delete())
@@ -1199,12 +1239,13 @@ class Gateway(http.server.BaseHTTPRequestHandler):
         The query is validated first, so a malformed one costs nothing upstream and the
         reply says what was wrong rather than a truncated archive.
         """
-        page, camera = events_filters(urllib.parse.parse_qs(raw_query, keep_blank_values=True))
+        page, camera, review = events_filters(urllib.parse.parse_qs(raw_query, keep_blank_values=True))
         with self.server.lock:
-            payload = select_events(self.server.api, page, camera, self.server.page_size,
+            payload = select_events(self.server.api, page, camera, review, self.server.page_size,
                                     self.server.max_pages)
         log(f"events: page {payload['page']} of {payload['pages']}, {payload['total']} "
             f"archived snapshot(s){'' if camera == 'all' else f' on {camera}'}, "
+            f"{'' if review == 'all' else 'kept for review only'}, "
             f"{len(payload['events'])} on this page")
         return payload
 

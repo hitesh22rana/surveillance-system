@@ -132,6 +132,7 @@ separately, on its own low substream at 3 fps.
 | Controlled deletion through the dashboard | **done once, 2026-10-02, with the owner's explicit authorisation** - one ended experimental snapshot deleted via the dashboard `POST` (`deleted: 1`, `missing: 0`, `failed: []`, `active: 0`), its image URL then 404, no archive wipe, and the Cancel confirmation observed doing nothing |
 | Archive pagination source | **API live 2026-10-02** - `GET /api/snapshots/events` returns the archive over 25-row pages with `total`/`pages`; over 100 snapshots across 5 pages were read, including rows older than the legacy 50 |
 | Dashboard pager | **observed in a browser 2026-10-02** - the page reads `GET /api/snapshots/events` at 25 rows per page and drives `page`/`camera` from its own controls, including a latest-page jump and a clamp to the last page; the measured behaviour is the final browser validation below |
+| Saved detections review filter | **implemented, PASS in `python3 scripts/check_console_api.py`** - against the same disposable fake Frigate, `review=kept` narrows rows, `total` and `pages` before the page is cut, so flagged rows beyond page 1 and the combined camera filter are both covered; the kept set is `retain_indefinitely` alone, so a legacy flagged row and a flagged animal are in and an unflagged person inside its own watched area is out; the four camera totals add up to the all-camera one, a page past the end clamps, and the archive count behind the archive-wide delete is still the whole archive. Eleven unrecognised, repeated, blank or no-value `review` values are refused with 400 before any upstream request, and seven query strings are refused with 400 on the delete path. **Not exercised in a browser** |
 | Final browser validation | **observed 2026-10-02** - the archive read **133 rows over 6 pages at 25**; one checkbox selected **1**, and **Next** carried that **1 off-page**; **Select all shown** gave **26 including the 1 held off-page**, and the selected-delete dialog correctly named **26**; **Cancel** and **Clear** both worked; jumping to the last page (**6**) showed the oldest rows, **126** and up; **Latest** returned to page 1; the `camera_4` filter returned an empty page 1; the archive-delete dialog counted **131 across all pages** and was then cancelled; no horizontal overflow at **320 px** or **1280 px**, desktop rows **78 px**, and all four players held **2560×1440** throughout. **No destructive button was clicked in this pass** - the one deleted snapshot came earlier from the terminal API under the owner's authorisation |
 | Ordinary six-hour expiry, watched end to end | **not done** - applied and confirmed loaded in native `/api/config`; nobody waited the window out |
 | Snapshots already kept under the old rule | **kept, and still a manual job** - nothing unpins them; only newly captured ordinary snapshots are on the six-hour timer |
@@ -356,7 +357,8 @@ one controlled deletion described below. Four cards, one per camera, each playin
 that camera's **main** channel - 2560×1440 HEVC - through the player go2rtc
 already ships, plus a per-camera detector read-out. Below that, the most recent
 person events whose entered zones intersect the area zone for the camera,
-filterable by camera, with the retained ones badged and selectable for review.
+filterable by camera and by review status, with the retained ones badged and
+selectable for review.
 
 The player is code the browser runs, so it is worth being exact about what
 reaches the page: `/video-rtc.js` is the copy bundled inside the Frigate image,
@@ -492,7 +494,17 @@ example and the arming details, and
 **Reviewing.** The dashboard reads the archive through the paginated source,
 **25 rows at a time** across the four cameras; each retained row carries a *Kept
 for review* badge, and a person row kept under the old rule reads *Previously
-kept*. The archive-wide count and the delete scopes are unchanged by any of this:
+kept*. Two tab groups narrow it: **All cameras** … **Camera 4**, and **All
+detections** … **Kept for review**. The second is the camera service's own kept
+flag and nothing else - `retain_indefinitely` - so it includes the *Previously
+kept* rows and kept animals, reads no class and no arming state, and still means
+the same thing after the retention policy changes. It is applied **before** the
+rows are counted and paged, so `total` and the page count always describe the
+narrowed set, and it combines with the camera filter rather than replacing it.
+Both choices live in the URL beside the page, so a reload and the back button both
+come back to the view, and changing either returns to page 1. The archive-wide
+count and the delete scopes are unchanged by any of this, and follow neither
+filter:
 a `person` row on **all four** cameras is listable and deletable whatever the
 retention policy is doing, so an old kept record can always be removed. Page,
 camera filter and a jump back to the newest page are part of the page itself, the
@@ -604,22 +616,28 @@ interleave. No new image, no framework, no dependency, no new port published, no
   `count` is every person snapshot from the four configured cameras in the whole
   archive, **older than `before`, not just the newest 50**; `before` is that whole
   second, so the number on screen is exactly the number a deletion reaches.
-- `GET /api/snapshots/events`, the paginated read, taking **optional** `page` and
-  `camera` and nothing else. Both are strictly validated before any upstream
-  request: a repeated, unknown or blank parameter, a page that is not a positive
-  whole number, or a camera that is not `all` or one of the four configured names
-  is refused. It answers
+- `GET /api/snapshots/events`, the paginated read, taking **optional** `page`,
+  `camera` and `review` and nothing else. All three are strictly validated before
+  any upstream request: a repeated, unknown or blank parameter, a page that is not
+  a positive whole number, a camera that is not `all` or one of the four configured
+  names, or a `review` that is not `all` or `kept` is refused. It answers
   `{"events": [...], "page": 2, "page_size": 25, "total": 118, "pages": 5}` -
-  **25 rows per page**, newest first, the camera filter applied **before** the
+  **25 rows per page**, newest first, both filters applied **before** the
   page is cut, so `total` and `pages` always describe the filtered set. A page
   past the last is clamped to the last rather than refused, so a page that is one
   behind after deletions still gets an answer. The read walks the archive to count
   it, so it is bounded by the same page cap as everything else here and answers
-  503 rather than a short page that reads like a whole one.
+  503 rather than a short page that reads like a whole one. `review=kept` is
+  exactly the rows carrying `retain_indefinitely` true, which is why a record
+  left over from the removed 60 second rule and a kept animal are both in it and
+  an unflagged person inside a watched area is not; no class list, zone list or
+  armed state is consulted.
 - `POST /api/snapshots/delete`, which takes **either** `{"ids": ["<native id>",
   ...]}` (1 to 1000, duplicates folded) **or** `{"all": true, "before":
   <summary cutoff>}`, and answers `{"deleted": 12, "missing": 0, "failed": [],
-  "active": 1}`.
+  "active": 1}`. It takes **no query string on any method**, so the scope comes
+  from that body alone and no argument can narrow a delete the confirmation did not
+  describe.
 
 `all` walks the archive first and deletes nothing at all if the walk cannot reach
 the end of the list, so a bounded run can never become a partial one. `before` is

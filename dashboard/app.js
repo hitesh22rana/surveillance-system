@@ -26,11 +26,12 @@
  *   - Timers never overlap: one loop for stats and events, both stopped while
  *     the tab is hidden. The archive is re-read only on its latest page, so a
  *     page the operator is reading through history stays where they put it.
- *   - The page and the camera are the whole of the URL state. Both are read from
- *     the query string on load, both are pushed onto the history when an operator
- *     asks for a different view, and Back restores them and reads that page
- *     again. A poll never writes history, and the worker's own clamp is written
- *     back by replacement so the URL always names the page actually on screen.
+ *   - The page, the camera and the review scope are the whole of the URL state.
+ *     All three are read from the query string on load, all three are pushed onto
+ *     the history when an operator asks for a different view, and Back restores
+ *     them and reads that page again. A poll never writes history, and the
+ *     worker's own clamp is written back by replacement so the URL always names
+ *     the page actually on screen.
  *   - Paging is three buttons and one read-only line saying which page is on
  *     screen. A thousand pages and eight pages are the same four controls, so
  *     the page count is never allowed to become a layout or a list to pick from.
@@ -132,10 +133,20 @@
    * own state rather than a guess at what happened. */
   const ENTRY_TIMEOUT_MS = 15000;
 
-  /* The one read this page forwards a query string to. The worker owns both
+  /* The one read this page forwards a query string to. The worker owns all three
    * parameters and answers a fixed page of 25 rows plus the total and the page
    * count, so this page never asks for a size and never slices one for itself. */
   const EVENTS_PATH = "/api/snapshots/events";
+
+  /* The review scope, as the worker accepts it. "kept" is its own
+   * retain_indefinitely flag and nothing else, so a row this suite no longer has
+   * a rule for is still a kept row; the alternative, re-deriving it from the label,
+   * the zone and the armed state, is the guess this deliberately does not make. The
+   * page adds no filter of its own on top: the total and the pages come from the
+   * same narrowed set the rows do. */
+  const REVIEW_FILTERS = Object.freeze(["all", "kept"]);
+  const REVIEW_KEPT = "kept";
+  const knownReview = (value) => REVIEW_FILTERS.includes(value);
 
   const POLL_MS = 5000; // status + events
   const TIMEOUT_MS = 4000; // per live request, below the proxy's own timeout
@@ -185,6 +196,7 @@
     retryLabel: $("retry-label"),
     feeds: $("feeds"),
     filters: $("filters"),
+    reviewFilters: $("review-filters"),
     tally: $("events-tally"),
     selectShown: $("select-shown"),
     clearSelection: $("clear-selection"),
@@ -228,6 +240,7 @@
 
   const state = {
     filter: "all",
+    review: "all",
     page: 1,
     pages: 1,
     pageSize: 1,
@@ -936,7 +949,9 @@
    * configured camera, which is exactly the set the archive-wide delete counts
    * and reaches - so it is listed as it answers and never re-filtered here.
    * A second filter in this file could only hide rows the total still counts,
-   * which is how a page ends up claiming a range it is not showing. The one
+   * which is how a page ends up claiming a range it is not showing. That holds
+   * for the review scope as much as for the camera: the worker narrows the rows
+   * before it counts and pages them, so the two always describe one set. The one
    * guard kept is the id: it is the only field that becomes a delete body. */
   function listedEvent(event) {
     return isObject(event) && typeof event.id === "string" && EVENT_ID.test(event.id);
@@ -993,6 +1008,15 @@
 
   /* The page itself is stated once, in the pager's own status line, so the tally
    * stops repeating it here. */
+
+  /* What the rows on screen are out of, in the words the two controls use. Both
+   * filters are named whenever either one is narrowing something, so a kept-only
+   * list on one camera can never read as the whole archive. */
+  function scopeText() {
+    const camera = state.filter === "all" ? "all cameras" : cameraLabel(state.filter);
+    return state.review === REVIEW_KEPT ? camera + ", kept for review only" : camera;
+  }
+
   function tallyText() {
     if (!state.eventsRead) {
       if (state.eventsError !== null) {
@@ -1000,8 +1024,17 @@
       }
       return state.eventsLoading ? "Reading saved detections…" : "Waiting for detection data.";
     }
-    const scope = state.filter === "all" ? "all cameras" : cameraLabel(state.filter);
-    if (state.total === 0) return "No saved detections · " + scope;
+    const scope = scopeText();
+    // Kept-only and all-detections are different empties, so the tally names which one
+    // it is. With the kept scope the scope line already says so, so the subject does not
+    // repeat it there.
+    if (state.total === 0) {
+      return (
+        (state.review === REVIEW_KEPT ? "Nothing is kept yet" : "No saved detections yet") +
+        " · " +
+        scope
+      );
+    }
     // The worker clamps a page past the end, so this is a shape this page does not
     // expect rather than a state it expects: it is said plainly, never as a range.
     if (state.rows.length === 0) return "No detections on this page · " + scope;
@@ -1015,6 +1048,25 @@
       state.total +
       " · " +
       scope
+    );
+  }
+
+  /* An empty list says which empty it is. "Nothing is kept for review yet" is a
+   * different fact from "no detections at all", and reading one as the other is
+   * how an operator concludes the cameras saw nothing when the answer was that
+   * nothing was flagged. An empty page inside a non-empty scope is the third case
+   * and gets its own words, because the archive is not empty. */
+  function emptyText() {
+    if (state.total !== 0) return "No detections on this page";
+    if (state.review === REVIEW_KEPT) {
+      return (
+        "Nothing is kept for review yet" +
+        (state.filter === "all" ? "" : " on " + cameraLabel(state.filter))
+      );
+    }
+    return (
+      "No saved detections yet" +
+      (state.filter === "all" ? "" : " for " + cameraLabel(state.filter))
     );
   }
 
@@ -1057,11 +1109,14 @@
     el.tally.textContent = tallyText();
 
     // Rebuild only when a row's content actually changes, so a focused checkbox
-    // is not destroyed by an unrelated poll. The signature carries the page it
-    // was built for and the facts that are printed on the row, so a change of
-    // page, of retention or of the restricted zone is always a real change.
+    // is not destroyed by an unrelated poll. The signature carries the scope the
+    // page was built for and the facts that are printed on the row, so a change
+    // of page, camera, review scope, retention or of the restricted zone is
+    // always a real change.
     const signature =
       state.filter +
+      ":" +
+      state.review +
       "#" +
       state.page +
       "#" +
@@ -1124,12 +1179,7 @@
     const empty = rows.length === 0;
     setShown(el.eventsEmpty, empty);
     setShown(el.events, !empty);
-    el.eventsEmpty.textContent =
-      state.total === 0
-        ? state.filter === "all"
-          ? "No saved detections yet"
-          : "No saved detections for " + cameraLabel(state.filter)
-        : "No detections on this page";
+    el.eventsEmpty.textContent = emptyText();
   }
 
   /* -------------------------------------------------------------- review -- */
@@ -1409,6 +1459,12 @@
     );
   }
 
+  /* The archive-wide delete never follows the filters on screen. It is counted from
+   * the worker's own whole-archive read rather than from the page being looked at,
+   * so the sentence says all four cameras, every page, and explicitly that the
+   * camera and review filters above do not narrow it. Without that last clause a
+   * kept-only view makes an archive-wide delete read as a kept-only one, which is
+   * the one scope that would be irreversible by surprise. */
   function archiveScope(summary) {
     if (summary.count === 0) {
       return "There are no saved snapshots to delete, so there is nothing to confirm.";
@@ -1416,7 +1472,8 @@
     return (
       "All " +
       plural(summary.count, "saved snapshot") +
-      " on all four cameras, including those kept for review, on every page."
+      " on all four cameras, including those kept for review, on every page. " +
+      "This does not follow the camera or review filter on this page."
     );
   }
 
@@ -2236,18 +2293,20 @@
     return { events: payload.events, page: page, pageSize: pageSize, total: total, pages: pages };
   }
 
-  /* The camera filter and the page number are the worker's business, so changing
-   * either is a new read rather than a re-slice of what is already on screen.
+  /* The camera filter, the review scope and the page number are the worker's
+   * business, so changing any of them is a new read rather than a re-slice of what
+   * is already on screen.
    *
    * One generation counter covers every read: a page walk is slow enough to still
    * be in flight when the operator has moved on, and a reply that arrives late is
-   * dropped rather than filed under the page and camera that were asked for
+   * dropped rather than filed under the page, camera and scope that were asked for
    * afterwards. It also means only the newest read owns the loading and error
    * state, so a superseded one cannot clear a list that is still correct.
    *
-   * A transition is a move to a different page or camera, not a re-read of the
-   * page already on screen: the old rows leave immediately, because leaving them
-   * under a new page number is the one thing this must never do.
+   * A transition is a move to a different page, camera or scope, not a re-read of
+   * the page already on screen: the old rows leave immediately, because leaving
+   * them under a new page number or a new filter is the one thing this must never
+   * do.
    *
    * Reports whether the list it left behind is a list that was actually read, so
    * a caller can say so rather than assume it. A failed read is never presented as
@@ -2256,6 +2315,7 @@
     const generation = ++state.generation;
     const page = state.page;
     const camera = state.filter;
+    const review = state.review;
 
     if (transition) {
       state.rows = [];
@@ -2271,7 +2331,13 @@
     const stale = { ok: false, error: "a newer read was still in flight", stale: true };
     try {
       const payload = await fetchJSON(
-        EVENTS_PATH + "?page=" + page + "&camera=" + encodeURIComponent(camera),
+        EVENTS_PATH +
+          "?page=" +
+          page +
+          "&camera=" +
+          encodeURIComponent(camera) +
+          "&review=" +
+          encodeURIComponent(review),
         ARCHIVE_READ_MS
       );
       if (generation !== state.generation) return stale;
@@ -2500,42 +2566,47 @@
 
   /* ---------------------------------------------------------- url state --- */
 
-  /* Page and camera are the two things an operator navigates by, so both live in
-   * the query string: a deep link has to survive a reload, and the back button has
-   * to step back through the pages somebody actually read. Nothing else is written
-   * there - the archive is read-only apart from the one delete above, and a URL is
-   * not a place to keep anything else.
+  /* Page, camera and review scope are the three things an operator navigates by, so
+   * all three live in the query string: a deep link has to survive a reload, and
+   * the back button has to step back through the pages somebody actually read.
+   * Nothing else is written there - the archive is read-only apart from the one
+   * delete above, and a URL is not a place to keep anything else.
    *
    * This is the initial parse, and it deliberately does not clamp to the page
    * count this page starts out with: state.pages is 1 until the worker's first
    * answer lands, so clamping here would turn a deep link to page 5 into a read of
    * page 1 and the operator would never see the archive they asked for. An unusable
-   * value falls back to the first page and to every camera instead. */
+   * value falls back to the first page, to every camera and to every detection. */
   const PAGE_PARAM = /^[1-9][0-9]*$/;
 
   function readUrlState() {
     const params = new URLSearchParams(window.location.search);
     const rawPage = params.get("page");
     const rawCamera = params.get("camera");
+    const rawReview = params.get("review");
     const page = Number(rawPage);
     return {
       page: rawPage !== null && PAGE_PARAM.test(rawPage) && Number.isSafeInteger(page) ? page : 1,
       filter: knownCamera(rawCamera) ? rawCamera : "all",
+      review: knownReview(rawReview) ? rawReview : "all",
     };
   }
 
   /* Canonical: the page is written only when it is not the first, and the camera
-   * only when it is not all, so the common case is a bare path and no two
-   * navigations ever produce two spellings of the same view. Every other parameter
-   * and the fragment are left exactly as they were found - this page did not put
-   * them there and does not get to clean them up. A push is a move the operator
-   * asked for; a replace is the same view being described more accurately. */
+   * and the review scope only when they are not all, so the common case is a bare
+   * path and no two navigations ever produce two spellings of the same view. Every
+   * other parameter and the fragment are left exactly as they were found - this
+   * page did not put them there and does not get to clean them up. A push is a move
+   * the operator asked for; a replace is the same view being described more
+   * accurately. */
   function writeUrlState(push) {
     const url = new URL(window.location.href);
     if (state.page > 1) url.searchParams.set("page", String(state.page));
     else url.searchParams.delete("page");
     if (state.filter === "all") url.searchParams.delete("camera");
     else url.searchParams.set("camera", state.filter);
+    if (state.review === "all") url.searchParams.delete("review");
+    else url.searchParams.set("review", state.review);
     const entry = url.pathname + url.search + url.hash;
     if (push) window.history.pushState(null, "", entry);
     else window.history.replaceState(null, "", entry);
@@ -2543,10 +2614,19 @@
 
   /* The pressed state of the camera tabs follows state.filter instead of being
    * written at the click, so a view restored from a link or from the back button
-   * shows the filter it is rather than leaving the old tab lit. */
+   * shows the filter it is rather than leaving the old tab lit. The review scope
+   * is marked the same way, for the same reason. */
   function markFilter(camera) {
     for (const tab of el.filters.querySelectorAll("button[data-camera]")) {
       const on = tab.dataset.camera === camera;
+      tab.classList.toggle("is-on", on);
+      tab.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+  }
+
+  function markReview(review) {
+    for (const tab of el.reviewFilters.querySelectorAll("button[data-review]")) {
+      const on = tab.dataset.review === review;
       tab.classList.toggle("is-on", on);
       tab.setAttribute("aria-pressed", on ? "true" : "false");
     }
@@ -2584,6 +2664,25 @@
     readEvents(true);
   });
 
+  /* The review scope is a move exactly like a camera filter: a different set of
+   * rows with its own paging, so it returns to page 1, and it leaves the selection
+   * alone for the same reason. A tick made while reading kept rows is still a tick
+   * after going back to every detection, and vice versa. */
+  el.reviewFilters.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-review]");
+    if (!button) return;
+    const chosen = button.dataset.review;
+    if (!knownReview(chosen)) return;
+    // Already the scope on screen, already on its first page: nothing to change, and
+    // nothing to add to the stack Back walks.
+    if (chosen === state.review && state.page === 1) return;
+    state.review = chosen;
+    state.page = 1;
+    writeUrlState(true);
+    markReview(chosen);
+    readEvents(true);
+  });
+
   /* Three steps, each a move to a page that exists. goToPage() refuses the move
    * that changes nothing and clamps to the page count, so no step can name a
    * page the archive does not have. */
@@ -2600,11 +2699,11 @@
     goToPage(1);
   });
 
-  /* Back and Forward are navigation, not a poll: they restore the page and the
-   * camera the URL names and read that page. Nothing is pushed - the entry being
-   * restored is already on the stack - and a read that was already in flight is
-   * dropped by the generation counter in readEvents rather than answering a page
-   * the operator has already walked away from.
+  /* Back and Forward are navigation, not a poll: they restore the page, the
+   * camera and the review scope the URL names and read that page. Nothing is
+   * pushed - the entry being restored is already on the stack - and a read that was
+   * already in flight is dropped by the generation counter in readEvents rather
+   * than answering a page the operator has already walked away from.
    *
    * While a delete is in flight the restore is still applied to state, so the URL
    * and the page on screen agree, but its read is left to the re-read that follows
@@ -2614,7 +2713,9 @@
     const next = readUrlState();
     state.page = next.page;
     state.filter = next.filter;
+    state.review = next.review;
     markFilter(next.filter);
+    markReview(next.review);
     if (state.deleting) return;
     readEvents(true);
   });
@@ -2667,13 +2768,16 @@
     }
   });
 
-  /* The page and the camera are taken from the URL before anything is drawn and
-   * before the first archive read, so a reload straight onto a deep link arrives
-   * on the page it names rather than on page 1 of every camera. */
+  /* The page, the camera and the review scope are taken from the URL before
+   * anything is drawn and before the first archive read, so a reload straight onto
+   * a deep link arrives on the page it names rather than on page 1 of every camera
+   * and every detection. */
   const initial = readUrlState();
   state.page = initial.page;
   state.filter = initial.filter;
+  state.review = initial.review;
   markFilter(state.filter);
+  markReview(state.review);
   // Canonical from the first paint, so the URL an operator copies out of the
   // address bar is one a reload comes back to. Nothing is pushed: nothing has been
   // navigated yet.

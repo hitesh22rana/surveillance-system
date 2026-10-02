@@ -446,27 +446,44 @@
             more. <strong>Kept for review</strong> is held until you delete it: a person
             inside a watched area while that camera is armed, or an animal on sight on the
             first three cameras. <strong>Previously kept</strong> was held before this rule
-            existed and is left exactly as it was. In this prototype a monitored area is
-            the whole camera frame.
+            existed and is left exactly as it was. The <strong>Kept for review</strong>
+            filter is the camera service&rsquo;s own kept flag and nothing else, so it
+            includes the <strong>Previously kept</strong> rows too. In this prototype a
+            monitored area is the whole camera frame.
           </p>
         </details>
 
-        <div class="filters" id="filters" role="group" aria-label="Filter detections by camera">
-          <button class="tab is-on" type="button" data-camera="all" aria-pressed="true">
-            All cameras
-          </button>
-          <button class="tab" type="button" data-camera="camera_1" aria-pressed="false">
-            Camera 1
-          </button>
-          <button class="tab" type="button" data-camera="camera_2" aria-pressed="false">
-            Camera 2
-          </button>
-          <button class="tab" type="button" data-camera="camera_3" aria-pressed="false">
-            Camera 3
-          </button>
-          <button class="tab" type="button" data-camera="camera_4" aria-pressed="false">
-            Camera 4
-          </button>
+        <!-- Two groups of tabs on one rule: which cameras, and how much of the archive.
+     Each group is its own named group, so a screen reader is told what each set
+     changes rather than one flat set of nine buttons. The worker narrows the rows
+     before it counts and pages them, so the review scope is never a re-slice of the
+     page on screen. -->
+        <div class="filters" id="filters">
+          <div class="filters__group" role="group" aria-label="Filter detections by camera">
+            <button class="tab is-on" type="button" data-camera="all" aria-pressed="true">
+              All cameras
+            </button>
+            <button class="tab" type="button" data-camera="camera_1" aria-pressed="false">
+              Camera 1
+            </button>
+            <button class="tab" type="button" data-camera="camera_2" aria-pressed="false">
+              Camera 2
+            </button>
+            <button class="tab" type="button" data-camera="camera_3" aria-pressed="false">
+              Camera 3
+            </button>
+            <button class="tab" type="button" data-camera="camera_4" aria-pressed="false">
+              Camera 4
+            </button>
+          </div>
+          <div class="filters__group" id="review-filters" role="group" aria-label="Filter detections by review status">
+            <button class="tab is-on" type="button" data-review="all" aria-pressed="true">
+              All detections
+            </button>
+            <button class="tab" type="button" data-review="kept" aria-pressed="false">
+              Kept for review
+            </button>
+          </div>
         </div>
 
         <div class="review">
@@ -528,7 +545,8 @@
             <h3 class="archive__title" id="archive-heading">Saved snapshot archive</h3>
             <p class="archive__note">
               Deletes every saved snapshot on all four cameras, on every page, including
-              the ones held for review. Separate from the rows ticked above.
+              the ones held for review. It does not follow the camera or review filter.
+              Separate from the rows ticked above.
             </p>
           </div>
           <button class="btn btn--danger" type="button" id="delete-all">

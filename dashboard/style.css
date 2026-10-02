@@ -611,8 +611,35 @@ a {
 .filters {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3xs);
+  align-items: center;
+  gap: 0 var(--space-2xs);
   border-bottom: 1px solid var(--rule);
+}
+
+/* Each set of tabs is its own group, so the two can wrap independently on a narrow
+ * screen instead of the review scope ending up half way down the camera list. */
+.filters__group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3xs);
+}
+
+/* The review scope sits at the far side of the rule, set apart by a drawn
+ * separator rather than by a character, so nothing is added to the accessibility
+ * tree and the two groups still read as one row on a wide screen. */
+.filters__group + .filters__group {
+  margin-inline-start: auto;
+  padding-inline-start: var(--space-xs);
+}
+
+.filters__group + .filters__group::before {
+  content: "";
+  align-self: center;
+  flex: none;
+  inline-size: 1px;
+  block-size: 1.25em;
+  margin-inline-end: var(--space-2xs);
+  background: var(--rule-2);
 }
 
 .tab {

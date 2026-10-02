@@ -46,6 +46,7 @@ HOST = "127.0.0.1:8088"  # where compose publishes the dashboard
 BASE_TIME = int(time.time()) - 6 * 3600  # six hours back: already past the six-hour window
 ARCHIVE = 58  # eligible person snapshots, deeper than the newest 50 a dashboard shows
 PAGE_SIZE = 7  # forces the walk past one page for a tiny fixture
+KEPT = 27  # pre-flagged rows in the review fixture: more than one page of 25, so kept paging is real
 
 
 def console_fixture():
@@ -65,6 +66,40 @@ def console_fixture():
         event("cat001", "camera_3", BASE_TIME + ARCHIVE + 3, label="cat"),   # eligible
         event("dog004", "camera_4", BASE_TIME + ARCHIVE + 4, label="dog"),   # refused
         event("noclip", "camera_4", BASE_TIME + ARCHIVE + 5, snapshot=False),
+    ]
+    return rows
+
+
+def review_fixture():
+    """The console archive plus the rows only the kept flag can tell apart.
+
+    Every row above is unpinned, so on their own they are one undifferentiated pile
+    and nothing could prove a kept-only read is really narrowed. What the filter has
+    to get right is the difference between a row the camera service flagged and a row
+    that merely looks like it should be, so this adds both, and adds them at the new
+    end so the flagged set is more than one page and a filter applied after the page
+    was cut could not have produced it:
+
+      - KEPT already-flagged rows on cameras 1 to 3;
+      - "legacy", a flagged person row carrying no watched zone at all, which reads
+        "Previously kept" on the page and is still a kept record;
+      - "kcat01", a flagged animal on camera_3, which the flag carries exactly as it
+        carries a person row and which no class or zone test would find on its own;
+      - "loose1", a person inside its own watched zone that was never flagged, so it
+        is not kept however much it resembles the rule that keeps one.
+
+    The pre-flagged rows sit on cameras 1 to 3, which are Home in every run here, so
+    nothing here depends on what the poll decides. camera_4 is left to the poll: it is
+    armed from startup, so its rows are flagged while this check runs, and the kept
+    view has to follow that flag just as it follows the ones written here.
+    """
+    rows = console_fixture()
+    rows += [event(f"kept{n:02d}", f"camera_{n % 3 + 1}", BASE_TIME + 1000 + n,
+                   retain_indefinitely=True) for n in range(KEPT)]
+    rows += [
+        event("legacy", "camera_2", BASE_TIME + 1200, zones=[], retain_indefinitely=True),
+        event("kcat01", "camera_3", BASE_TIME + 1201, label="cat", retain_indefinitely=True),
+        event("loose1", "camera_1", BASE_TIME + 1202),
     ]
     return rows
 
@@ -109,6 +144,14 @@ def eligible_ids(fake):
     """The rows the policy counts, restated here and deliberately not imported: a
     configured camera's own person-or-animal event that carries a snapshot, however old."""
     return sorted(row["id"] for row in fake.events if eligible_row(row))
+
+
+def kept_row(row):
+    """A row the kept-only read must carry: eligible on its own terms, and flagged kept
+    by the camera service. The flag is the entire contract of that filter, so it is
+    restated here the way eligible_row is rather than imported, and it is the flag
+    alone - no label, no zone, no arming state."""
+    return eligible_row(row) and row.get("retain_indefinitely") is True
 
 
 def free_port():
@@ -238,10 +281,12 @@ def check_defaults():
     assert retain.EVENTS_PAGE_SIZE == 25, f"the archive page size is {retain.EVENTS_PAGE_SIZE!r}"
     assert retain.CAMERA_FILTERS == ("all", "camera_1", "camera_2", "camera_3", "camera_4"), \
         f"the camera filters {retain.CAMERA_FILTERS!r}"
+    assert retain.REVIEW_FILTERS == ("all", "kept"), \
+        f"the review filters {retain.REVIEW_FILTERS!r}"
     print("ok  0.0.0.0:8090 by default, four exact paths, both dashboard Hosts, "
           "at most 1000 ids and 64 KiB per request, 25 rows per archive page, four "
-          "camera filters plus all, entry review armed by hand on cameras 1-3 with "
-          "camera_4 always armed and saved in /state/entry.json")
+          "camera filters plus all, an all/kept review scope, entry review armed by "
+          "hand on cameras 1-3 with camera_4 always armed and saved in /state/entry.json")
 
 
 def check_guards():
@@ -558,6 +603,17 @@ def check_events_query_refusals():
                 ("camera is upper case", "?camera=CAMERA_1", 400),
                 ("camera is blank", "?camera=", 400),
                 ("camera is repeated", "?camera=all&camera=camera_1", 400),
+                ("review is unknown", "?review=flagged", 400),
+                ("review is a numeric flag", "?review=1", 400),
+                ("review is a boolean", "?review=true", 400),
+                ("review is a sublabel", "?review=previously_kept", 400),
+                ("review is upper case", "?review=Kept", 400),
+                ("review is padded", "?review=kept%20", 400),
+                ("review is blank", "?review=", 400),
+                ("review has no value", "?review", 400),
+                ("review is repeated", "?review=all&review=kept", 400),
+                ("review beside a bad camera", "?review=kept&camera=camera_9", 400),
+                ("an unknown parameter beside review", "?review=kept&limit=25", 400),
                 ("an unknown parameter", "?limit=25", 400),
                 ("an unknown parameter beside a real one", "?page=1&offset=25", 400),
                 ("a path parameter", "?path=/config", 400),
@@ -581,6 +637,149 @@ def check_events_query_refusals():
             leaks(output)
             print(f"ok  {len(cases)} malformed archive queries refused with HTTP 400, every one "
                   f"before a request was sent upstream; a page past the end is answered instead")
+
+
+def check_events_review_filter():
+    """review=kept narrows to the flagged rows, before the page is cut, and combines
+    with the camera filter. The archive count behind the archive-wide delete stays the
+    whole archive whatever this read was filtered to.
+
+    The contract here is the flag and nothing else, so the fixture carries a legacy
+    flagged row and a flagged animal that no class or zone test would find, and one
+    unflagged person inside its own watched area that must stay out. Everything else
+    is about ordering: total, pages and the rows have to describe one set, so a
+    filter applied after the page was cut cannot pass.
+    """
+    fake = FakeFrigate(review_fixture())
+    with serving(fake) as base:
+        with gateway(base) as (port, output):
+            every = [row["id"] for row in eligible_rows(fake)]
+            kept = [row["id"] for row in eligible_rows(fake) if kept_row(row)]
+            # No fixed count here: camera_4 is always armed, so the poll flags its rows
+            # while this runs and the kept view has to follow that too. What has to hold
+            # is that the flagged set is neither everything nor a single page.
+            assert len(kept) < len(every), "the kept view is not narrower than the whole archive"
+            assert len(kept) > retain.EVENTS_PAGE_SIZE, \
+                "the flagged set fits on one page, so the paging below proves nothing"
+            for tag in ("kept00", "legacy", "kcat01"):
+                assert ineligible(fake, tag) in kept, \
+                    f"{tag} is flagged kept and was left out of the kept view"
+            assert ineligible(fake, "loose1") not in kept, \
+                "an unflagged person inside its own watched area read as kept"
+            assert ineligible(fake, "loose1") in every, \
+                "the unflagged row is in no view at all"
+
+            # Nothing named is everything, and naming all is the same answer.
+            default = event_page(port)
+            assert default["total"] == len(every), \
+                f"the default reported {default['total']} of {len(every)}"
+            assert event_page(port, "?review=all") == default, \
+                "review=all is not the same answer as omitting it"
+
+            only_kept = event_page(port, "?review=kept")
+            assert only_kept["total"] == len(kept), \
+                f"review=kept reported {only_kept['total']} of {len(kept)} flagged rows"
+            assert only_kept["pages"] == max(1, -(-len(kept) // retain.EVENTS_PAGE_SIZE)), \
+                f"review=kept reported {only_kept['pages']} pages for {len(kept)} rows"
+            assert [row["id"] for row in only_kept["events"]] == \
+                kept[:retain.EVENTS_PAGE_SIZE], \
+                "review=kept page 1 is not the newest flagged rows, in order"
+
+            # Page 2, which exists only because the kept rows outnumber a page.
+            second = event_page(port, "?review=kept&page=2")
+            assert second["page"] == 2 and second["total"] == only_kept["total"], \
+                f"page 2 of the kept view says {second['page']} of {second['total']}"
+            assert [row["id"] for row in second["events"]] == \
+                kept[retain.EVENTS_PAGE_SIZE:2 * retain.EVENTS_PAGE_SIZE], \
+                "page 2 of the kept view is not the remainder, in order"
+            beyond = event_page(port, "?review=kept&page=99999")
+            assert beyond["page"] == second["page"] and \
+                [row["id"] for row in beyond["events"]] == \
+                [row["id"] for row in second["events"]], \
+                "a page past the end of the kept view did not clamp onto its last page"
+
+            # Whatever the two pages between them carried, every row was flagged. A set
+            # built from a class list instead would have lost legacy and kcat01 above and
+            # picked up loose1, so this is the one assertion that names the flag itself.
+            for row in only_kept["events"] + second["events"]:
+                assert row.get("retain_indefinitely") is True, \
+                    f"{row['id']} is on a kept page without the flag"
+
+            # The two filters combine rather than one replacing the other.
+            per_camera = []
+            for camera in retain.CAMERAS:
+                expected = [row["id"] for row in eligible_rows(fake)
+                            if row["camera"] == camera and kept_row(row)]
+                assert expected, f"the fixture has no flagged row on {camera}"
+                both = event_page(port, f"?camera={camera}&review=kept")
+                per_camera.append(both["total"])
+                assert both["total"] == len(expected), \
+                    f"{camera} flagged reported {both['total']} of {len(expected)}"
+                assert both["pages"] == max(1, -(-len(expected) // retain.EVENTS_PAGE_SIZE)), \
+                    f"{camera} flagged reported {both['pages']} pages for {len(expected)} rows"
+                assert [row["id"] for row in both["events"]] == \
+                    expected[:retain.EVENTS_PAGE_SIZE], \
+                    f"{camera} flagged page 1 is not its own newest flagged rows"
+            assert sum(per_camera) == only_kept["total"], \
+                f"the four camera totals {per_camera} do not add up to {only_kept['total']}"
+            assert only_kept["total"] < default["total"], \
+                "combining the two filters widened the archive rather than narrowing it"
+
+            # And the count behind the archive-wide delete is the whole archive, not this
+            # page: it is read from the worker's own scope and never from a filtered read.
+            summary = reply(port)
+            assert summary["count"] == len(every), \
+                f"the archive counted {summary['count']} of {len(every)} while the read was filtered"
+            assert summary["count"] > only_kept["total"], \
+                "the fixture cannot tell a whole-archive count from a flagged-only one"
+            assert fake.deletes == [], f"reading the archive deleted {fake.deletes}"
+            text = leaks(output)
+            assert "kept for review only" in text, \
+                f"the narrowed scope was not logged:\n{text}"
+            print(f"ok  review filter: {only_kept['total']} flagged of {default['total']} eligible "
+                  f"in {only_kept['pages']} pages, page 2 carrying the remainder and a page past "
+                  f"the end clamping onto it, a legacy flagged row and a flagged animal included, "
+                  f"an unflagged person inside its own area excluded, the four camera totals "
+                  f"adding up, and the archive still counted at {summary['count']}")
+
+
+def check_delete_query_refused():
+    """The delete path takes no query string at all, so no argument can narrow a delete
+    the confirmation did not describe.
+
+    Each case sends a body that would otherwise delete a row, so a missing guard shows
+    up as a destroyed fixture row rather than as a status code. The very same request
+    without the argument still deletes, which is what says the refusal is about the
+    query and not about the body.
+    """
+    fake = FakeFrigate(console_fixture())
+    with serving(fake) as base:
+        with gateway(base) as (port, output):
+            before = len(fake.calls)
+            target = ineligible(fake, "a00000")
+            body = {"ids": [target]}
+            for query in ("?review=kept", "?camera=camera_1", "?page=2&review=kept",
+                          "?review=all", "?all=true", "?before=1", "?ids=a00000"):
+                status, headers, body_bytes = call(port, "POST", retain.DELETE_PATH + query,
+                                                   body=body)
+                assert status == 400, \
+                    f"a delete carrying {query!r} answered HTTP {status}: {body_bytes!r}"
+                assert json.loads(body_bytes).keys() == {"error"}, \
+                    f"a delete carrying {query!r} answered {body_bytes!r}"
+                assert len(fake.calls) == before, \
+                    f"a delete carrying {query!r} reached Frigate: {fake.calls[before:]}"
+                assert fake.deletes == [], f"a delete carrying {query!r} deleted {fake.deletes}"
+                assert target in [row["id"] for row in fake.events], \
+                    f"a delete carrying {query!r} destroyed {target}"
+            status, _headers, body_bytes = call(port, "POST", retain.DELETE_PATH, body=body)
+            assert status == 200, f"the unqueried delete answered HTTP {status}: {body_bytes!r}"
+            assert json.loads(body_bytes)["deleted"] == 1, \
+                f"the unqueried delete did not delete: {body_bytes!r}"
+            assert fake.deletes == [target], f"upstream saw {fake.deletes}"
+            leaks(output)
+    print(f"ok  7 query strings refused with HTTP 400 on the delete path, every one before a "
+          f"request was sent and with {target} still upstream; the same body without the query "
+          f"deletes it, so the refusal is about the argument and not the scope")
 
 
 def check_selected_delete():
@@ -1236,6 +1435,7 @@ def main():
     check_defaults()
     for check in (check_guards, check_bodies, check_summary, check_events_pages,
                   check_events_camera_filter, check_events_query_refusals,
+                  check_events_review_filter, check_delete_query_refused,
                   check_selected_delete, check_partial_failures, check_archive_delete,
                   check_page_cap_fails_closed, check_entry_reads_home_and_camera_4_is_always,
                   check_entry_write_refusals, check_entry_presets_and_toggles,
