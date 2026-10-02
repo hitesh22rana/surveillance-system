@@ -634,7 +634,7 @@
 
     // Rebuild only when the row set actually changes, so a focused row is not
     // destroyed by an unrelated poll.
-    const signature = state.filter + "#" + rows.map((row) => row.id).join("|");
+    const signature = state.filter + "#" + rows.map((row) => row.id + ":" + (row.retain_indefinitely === true || row.retain_indefinitely === 1 ? "1" : "0")).join("|");
     if (signature === renderedSignature) {
       setShown(el.events, rows.length !== 0);
       setShown(el.eventsEmpty, rows.length === 0);
