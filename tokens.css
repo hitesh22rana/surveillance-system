@@ -1,0 +1,100 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: Cobalt (dark adaptation)
+ * tone: operational console · anchor hue: 256 (one restrained cool-blue signal on cool neutrals)
+ * nav: N9 edge-aligned minimal · footer: Ft2 inline rule single line
+ * enrichment: none — the live preview frames are the imagery, nothing is decorated
+ * pre-emit critique: P4 H5 E4 S5 R5 V5
+ * contrast: pairs designed to WCAG 2.1 minimums — pending browser verification (docs/validation.md)
+ * mobile: 320 / 375 / 414 / 768 — no horizontal scroll, single-line affordances
+ *
+ * Design tokens only. The dashboard stylesheet consumes these by name.
+ *
+ * Type: native system sans, because the appliance must render with no network
+ * fetch; native mono for machine readouts. Two families, both local.
+ */
+
+:root {
+  /* ---- Surfaces: cool neutrals tinted toward hue 256, never zero chroma ---- */
+  --color-paper: oklch(16% 0.008 256); /* app background */
+  --color-paper-2: oklch(19.5% 0.009 256); /* card surface */
+  --color-paper-3: oklch(23% 0.01 256); /* reserved frame, chip fill */
+  --color-paper-4: oklch(28% 0.011 256); /* hover on reserved frame */
+  --color-graphite: oklch(13% 0.007 256); /* deepest band */
+
+  /* ---- Rules: hairlines are the depth model. rule-2 is a component boundary. ---- */
+  --color-rule: oklch(30% 0.012 256); /* internal hairline */
+  --color-rule-2: oklch(50% 0.018 256); /* card / control boundary, >=3:1 on paper */
+  --color-rule-3: oklch(62% 0.02 256); /* hover / active boundary */
+
+  /* ---- Ink ---- */
+  --color-ink: oklch(96% 0.004 256); /* primary text */
+  --color-ink-2: oklch(86% 0.008 256); /* body copy */
+  --color-muted: oklch(72% 0.011 256); /* meta, helper, placeholders */
+  --color-faint: oklch(58% 0.011 256); /* de-emphasised / disabled */
+
+  /* ---- One signal accent. Text-on-dark use only; it never fills a field. ---- */
+  --color-accent: oklch(66% 0.13 250); /* accent text, links, ticks (5.8:1 on paper) */
+  --color-accent-quiet: oklch(66% 0.13 250 / 0.14);
+  --color-accent-line: oklch(66% 0.13 250 / 0.5);
+  /* A darker step exists solely so filled controls can carry text at 4.5:1. */
+  --color-accent-fill: oklch(52% 0.16 250);
+  --color-accent-fill-ink: oklch(98% 0.008 250);
+  --color-focus: oklch(84% 0.11 242); /* ring: >=3:1 on paper, paper-3 and accent-fill */
+
+  /* ---- Status: always paired with a word, never colour alone ---- */
+  --color-ok: oklch(74% 0.12 158);
+  --color-stale: oklch(82% 0.12 84);
+  --color-bad: oklch(72% 0.15 24);
+
+  /* ---- Type ---- */
+  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+    Arial, sans-serif;
+  --font-readout: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --text-xs: 0.6875rem; /* 11px — readouts only, never body copy */
+  --text-sm: 0.8125rem; /* 13px — meta */
+  --text-base: 1rem; /* 16px — body floor */
+  --text-md: 1.125rem;
+  --text-lg: 1.375rem;
+  --text-xl: 1.75rem;
+
+  --lh-tight: 1.15;
+  --lh-snug: 1.35;
+  --lh-body: 1.55;
+  --tracking-tight: -0.02em;
+  --tracking-readout: 0.08em;
+
+  /* ---- Space: 4pt scale ---- */
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
+  --space-2xl: 4rem;
+
+  /* ---- Radii: drawn with a ruler ---- */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-pill: 999px;
+
+  /* ---- Feed geometry: reserved, so nothing shifts when a frame lands ---- */
+  --ratio-feed: 352 / 288;
+
+  /* ---- Motion: press feedback only ---- */
+  --dur-micro: 120ms;
+  --dur-short: 200ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* ---- Layer scale ---- */
+  --z-base: 1;
+  --z-raised: 10;
+  --z-sticky: 200;
+  --z-modal: 400;
+
+  /* ---- Hit target floor ---- */
+  --tap-min: 44px;
+}

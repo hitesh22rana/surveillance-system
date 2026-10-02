@@ -14,3 +14,4 @@ logs/
 captures/
 *.mp4
 *.jpg
+__pycache__/

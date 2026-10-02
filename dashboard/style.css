@@ -1,0 +1,653 @@
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: Cobalt (dark adaptation)
+ * tone: operational console · anchor hue: 256 · nav: N9 · footer: Ft2
+ * pre-emit critique: P4 H5 E4 S5 R5 V5
+ * contrast: designed to WCAG 2.1 minimums, pending browser verification · mobile: 320/375/414/768
+ *
+ * Workbench adaptation: the canonical Workbench page is a guided tour with
+ * sticky bottom CTA and reveal choreography. A monitoring console has no tour,
+ * so the CTA and reveals are cut and the shape is kept — small functional
+ * heading, framed captures as the content, the frame as the divider. Knobs:
+ * F3 tabular spec sheet (3 columns, hairline rules, tabular numerics) for the
+ * readout strip; readout chips instead of a hero stat. Motion is press feedback
+ * only.
+ */
+
+/* ---------------------------------------------------------------- base --- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  overflow-x: clip;
+}
+
+/* One rule for every element: several components below set display, and an
+ * author declaration beats the user-agent rule behind the hidden attribute. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  overflow-x: clip;
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink-2);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  font-weight: 400;
+  line-height: var(--lh-body);
+  -webkit-text-size-adjust: 100%;
+}
+
+h1,
+h2,
+p,
+dl,
+dd,
+dt,
+ul,
+li,
+figure {
+  margin: 0;
+  padding: 0;
+}
+
+ul {
+  list-style: none;
+}
+
+h1,
+h2 {
+  color: var(--color-ink);
+  font-weight: 600;
+  font-style: normal;
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+a {
+  color: var(--color-accent);
+  text-decoration-color: var(--color-accent-line);
+  text-underline-offset: 2px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+::selection {
+  background: var(--color-accent-quiet);
+  color: var(--color-ink);
+}
+
+/* One place where a visible native scrollbar is a usability win: the event
+   list can outgrow the viewport on a small screen. */
+.events {
+  overflow-y: auto;
+  max-height: 34rem;
+  scrollbar-color: var(--color-rule-3) var(--color-paper-2);
+}
+
+/* ------------------------------------------------------- top bar (N9) --- */
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--color-paper);
+  border-bottom: 1px solid var(--color-rule);
+}
+
+.bar__inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-lg);
+  padding: var(--space-sm) clamp(1rem, 4vw, 2.5rem);
+  padding-inline: max(clamp(1rem, 4vw, 2.5rem), env(safe-area-inset-left));
+}
+
+.wordmark {
+  margin-inline-end: auto;
+  color: var(--color-ink);
+  font-family: var(--font-readout);
+  font-size: var(--text-sm);
+  letter-spacing: var(--tracking-readout);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.bar__state,
+.feed__status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  white-space: nowrap;
+}
+
+.bar__nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.linkout {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  padding-inline: var(--space-sm);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-md);
+  color: var(--color-ink-2);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-micro) var(--ease-out),
+    border-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .linkout:hover {
+    background: var(--color-paper-3);
+    border-color: var(--color-rule-3);
+    color: var(--color-ink);
+  }
+}
+
+.linkout:active {
+  transform: scale(0.98);
+}
+
+.linkout:visited {
+  color: var(--color-ink-2);
+}
+
+/* ------------------------------------------------------------ layout ----- */
+
+#main {
+  padding: var(--space-xl) clamp(1rem, 4vw, 2.5rem);
+  padding-inline: max(clamp(1rem, 4vw, 2.5rem), env(safe-area-inset-left));
+  padding-bottom: max(var(--space-xl), env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xl);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+  max-width: 78rem;
+}
+
+/* Eyebrow sits directly above the heading in the same column. Never beside it. */
+.section__head {
+  display: block;
+  max-width: 62ch;
+}
+
+.section__title {
+  font-size: var(--text-xl);
+}
+
+h1.section__title {
+  font-size: var(--text-display);
+  margin-block: var(--space-3xs) var(--space-xs);
+}
+
+.eyebrow {
+  color: var(--color-muted);
+  font-family: var(--font-readout);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-readout);
+  text-transform: uppercase;
+}
+
+.section__lede {
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  max-width: 62ch;
+}
+
+/* ----------------------------------------------------------- notice ------ */
+
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
+  padding: var(--space-md);
+  border: 1px solid var(--color-rule-2);
+  border-inline-start: 3px solid var(--color-muted);
+  border-radius: var(--radius-md);
+  background: var(--color-paper-2);
+  color: var(--color-ink-2);
+  max-width: 78rem;
+}
+
+.notice[data-tone="bad"] {
+  border-inline-start-color: var(--color-bad);
+}
+
+.notice[data-tone="warn"] {
+  border-inline-start-color: var(--color-stale);
+}
+
+.notice__text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--text-sm);
+  max-width: 60ch;
+}
+
+.notice[data-tone="bad"] .notice__text {
+  color: var(--color-ink);
+}
+
+/* ------------------------------------------------------------ buttons ---- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-min);
+  min-width: var(--tap-min);
+  padding: var(--space-xs) var(--space-md);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-md);
+  background: var(--color-paper-3);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-micro) var(--ease-out),
+    border-color var(--dur-micro) var(--ease-out);
+}
+
+.btn--primary {
+  background: var(--color-accent-fill);
+  border-color: var(--color-accent-fill);
+  color: var(--color-accent-fill-ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn--primary:hover {
+    background: var(--color-accent);
+    border-color: var(--color-accent);
+  }
+}
+
+.btn:active {
+  transform: scale(0.98);
+}
+
+.btn[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* In-flight: the label stays readable, the control stops accepting input. */
+.btn[data-busy="true"] {
+  cursor: progress;
+  opacity: 0.75;
+}
+
+/* ------------------------------------------------------------- feeds ----- */
+
+.feeds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-lg);
+}
+
+.feed {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  padding: var(--space-sm);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-2);
+  min-width: 0;
+}
+
+.feed__frame {
+  position: relative;
+  aspect-ratio: var(--ratio-feed);
+  overflow: hidden;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-md);
+  background: var(--color-paper-3);
+}
+
+.feed__img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.feed__placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-sm);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.feed__meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  min-width: 0;
+}
+
+.feed__name {
+  font-size: var(--text-md);
+  font-family: var(--font-readout);
+  font-weight: 500;
+  letter-spacing: 0;
+}
+
+.readout {
+  font-family: var(--font-readout);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.feed__stamp {
+  color: var(--color-faint);
+}
+
+/* Status tick: shape + colour, and the word beside it carries the meaning. */
+.tick {
+  inline-size: 8px;
+  block-size: 8px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--color-faint);
+}
+
+.tick[data-tone="ok"] {
+  background: var(--color-ok);
+}
+
+.tick[data-tone="warn"] {
+  background: var(--color-stale);
+}
+
+.tick[data-tone="bad"] {
+  background: var(--color-bad);
+}
+
+.tick[data-tone="pending"] {
+  background: var(--color-faint);
+}
+
+/* ------------------------------------------------------------- strip ----- */
+
+.readout-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: var(--color-graphite);
+}
+
+.readout-strip__item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  padding: var(--space-sm) var(--space-md);
+  min-width: 0;
+}
+
+.readout-strip__item + .readout-strip__item {
+  border-inline-start: 1px solid var(--color-rule);
+}
+
+.readout-strip dt {
+  color: var(--color-muted);
+  font-family: var(--font-readout);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-readout);
+  text-transform: uppercase;
+}
+
+.readout-strip dd {
+  color: var(--color-ink);
+  font-family: var(--font-readout);
+  font-size: var(--text-md);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+/* ------------------------------------------------------------ events ----- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-ink-2);
+  font-family: var(--font-readout);
+  font-size: var(--text-sm);
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color var(--dur-micro) var(--ease-out),
+    border-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .chip:hover {
+    background: var(--color-paper-3);
+    border-color: var(--color-rule-3);
+  }
+}
+
+.chip:active {
+  transform: scale(0.98);
+}
+
+.chip.is-on {
+  background: var(--color-accent-quiet);
+  border-color: var(--color-accent-line);
+  color: var(--color-ink);
+}
+
+.events__tally {
+  color: var(--color-muted);
+}
+
+.events {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-2);
+}
+
+.event {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  min-width: 0;
+}
+
+.event + .event {
+  border-top: 1px solid var(--color-rule);
+}
+
+.event__shot {
+  flex: none;
+  display: block;
+  inline-size: 96px;
+  aspect-ratio: var(--ratio-feed);
+  overflow: hidden;
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-paper-3);
+}
+
+.event__img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.event__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3xs);
+  min-width: 0;
+}
+
+.event__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-xs);
+  min-width: 0;
+}
+
+.event__camera {
+  color: var(--color-ink);
+  font-family: var(--font-readout);
+  font-size: var(--text-sm);
+}
+
+.event__zone {
+  color: var(--color-accent);
+  font-family: var(--font-readout);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+}
+
+.events__empty {
+  padding: var(--space-lg) var(--space-md);
+  border: 1px dashed var(--color-rule-2);
+  border-radius: var(--radius-lg);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  max-width: 60ch;
+}
+
+/* ------------------------------------------------------------ footer ----- */
+
+.foot {
+  border-top: 1px solid var(--color-rule);
+  padding: var(--space-lg) clamp(1rem, 4vw, 2.5rem);
+  padding-inline: max(clamp(1rem, 4vw, 2.5rem), env(safe-area-inset-left));
+  padding-bottom: max(var(--space-lg), env(safe-area-inset-bottom));
+}
+
+.foot__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+  color: var(--color-faint);
+  font-family: var(--font-readout);
+  font-size: var(--text-xs);
+  letter-spacing: 0.04em;
+}
+
+.foot__mark {
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-readout);
+}
+
+/* -------------------------------------------------------- responsive ----- */
+
+@media (max-width: 48rem) {
+  .feeds {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .readout-strip {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .readout-strip__item + .readout-strip__item {
+    border-inline-start: 0;
+    border-top: 1px solid var(--color-rule);
+  }
+}
+
+@media (max-width: 30rem) {
+  .bar__inner {
+    gap: var(--space-xs);
+  }
+
+  .bar__nav {
+    width: 100%;
+  }
+
+  .linkout {
+    flex: 1 1 auto;
+    justify-content: center;
+  }
+
+  .event__shot {
+    inline-size: 72px;
+  }
+}
+
+/* ---------------------------------------------------------- motion ------ */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+
+  .btn:active,
+  .chip:active,
+  .linkout:active {
+    transform: none;
+  }
+}

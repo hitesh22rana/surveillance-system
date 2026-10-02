@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <title>Zone Console — camera overview</title>
+    <meta
+      name="description"
+      content="Local camera overview: current status for four cameras and recent person detections in monitored areas."
+    />
+    <meta name="robots" content="noindex, nofollow" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/tokens.css" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="bar">
+      <div class="bar__inner">
+        <p class="wordmark">Zone Console</p>
+        <p class="bar__state" id="backend-state" role="status">
+          <span class="tick" data-tone="pending" aria-hidden="true"></span>
+          <span id="backend-state-text">Connecting to cameras</span>
+        </p>
+        <nav class="bar__nav" aria-label="Camera tools">
+          <a class="linkout" href="https://localhost:8971/" target="_blank" rel="noopener noreferrer">
+            Frigate UI
+          </a>
+          <a
+            class="linkout"
+            href="https://localhost:8971/settings"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Zone editor
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <div class="notice" id="notice" data-tone="pending" role="status" aria-live="polite" hidden>
+        <p class="notice__text" id="notice-text"></p>
+        <button class="btn btn--primary" type="button" id="retry">
+          <span id="retry-label">Retry now</span>
+        </button>
+      </div>
+
+      <section class="section" aria-labelledby="feeds-heading">
+        <div class="section__head">
+          <p class="eyebrow">Still pictures, not live video</p>
+          <h1 class="section__title" id="feeds-heading">Camera overview</h1>
+          <p class="section__lede">Views update every two seconds.</p>
+        </div>
+
+        <ul class="feeds" id="feeds">
+          <li class="feed" data-camera="camera_1">
+            <div class="feed__frame">
+              <img class="feed__img" alt="Latest picture from Camera 1" hidden />
+              <p class="feed__placeholder">Waiting for the first picture</p>
+            </div>
+            <div class="feed__meta">
+              <h2 class="feed__name">Camera 1</h2>
+              <p class="readout feed__status">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span class="feed__status-text">no data</span>
+              </p>
+              <p class="readout feed__stamp">&mdash;</p>
+            </div>
+          </li>
+          <li class="feed" data-camera="camera_2">
+            <div class="feed__frame">
+              <img class="feed__img" alt="Latest picture from Camera 2" hidden />
+              <p class="feed__placeholder">Waiting for the first picture</p>
+            </div>
+            <div class="feed__meta">
+              <h2 class="feed__name">Camera 2</h2>
+              <p class="readout feed__status">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span class="feed__status-text">no data</span>
+              </p>
+              <p class="readout feed__stamp">&mdash;</p>
+            </div>
+          </li>
+          <li class="feed" data-camera="camera_3">
+            <div class="feed__frame">
+              <img class="feed__img" alt="Latest picture from Camera 3" hidden />
+              <p class="feed__placeholder">Waiting for the first picture</p>
+            </div>
+            <div class="feed__meta">
+              <h2 class="feed__name">Camera 3</h2>
+              <p class="readout feed__status">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span class="feed__status-text">no data</span>
+              </p>
+              <p class="readout feed__stamp">&mdash;</p>
+            </div>
+          </li>
+          <li class="feed" data-camera="camera_4">
+            <div class="feed__frame">
+              <img class="feed__img" alt="Latest picture from Camera 4" hidden />
+              <p class="feed__placeholder">Waiting for the first picture</p>
+            </div>
+            <div class="feed__meta">
+              <h2 class="feed__name">Camera 4</h2>
+              <p class="readout feed__status">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span class="feed__status-text">no data</span>
+              </p>
+              <p class="readout feed__stamp">&mdash;</p>
+            </div>
+          </li>
+        </ul>
+
+        <dl class="readout-strip" id="readout-strip">
+          <div class="readout-strip__item">
+            <dt>Cameras watching</dt>
+            <dd id="stat-online">&mdash;</dd>
+          </div>
+          <div class="readout-strip__item">
+            <dt>Detection speed</dt>
+            <dd id="stat-inference">&mdash;</dd>
+          </div>
+          <div class="readout-strip__item">
+            <dt>Status age</dt>
+            <dd id="stat-age">&mdash;</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="section" aria-labelledby="events-heading">
+        <div class="section__head">
+          <h2 class="section__title" id="events-heading">Recent zone detections</h2>
+          <p class="section__lede">People seen in monitored areas.</p>
+        </div>
+
+        <div class="filters" id="filters" role="group" aria-label="Filter detections by camera">
+          <button class="chip is-on" type="button" data-camera="all" aria-pressed="true">
+            All cameras
+          </button>
+          <button class="chip" type="button" data-camera="camera_1" aria-pressed="false">
+            Camera 1
+          </button>
+          <button class="chip" type="button" data-camera="camera_2" aria-pressed="false">
+            Camera 2
+          </button>
+          <button class="chip" type="button" data-camera="camera_3" aria-pressed="false">
+            Camera 3
+          </button>
+          <button class="chip" type="button" data-camera="camera_4" aria-pressed="false">
+            Camera 4
+          </button>
+        </div>
+
+        <p class="readout events__tally" id="events-tally">Waiting for detection data.</p>
+
+        <ul class="events" id="events" hidden></ul>
+
+        <p class="events__empty" id="events-empty" hidden>No zone detections yet</p>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p class="foot__line">
+        <span class="foot__mark">Zone Console</span>
+        <span aria-hidden="true">·</span>
+        <span>Local prototype</span>
+        <span aria-hidden="true">·</span>
+        <span>Person detection</span>
+        <span aria-hidden="true">·</span>
+        <span>Email alerts not enabled</span>
+      </p>
+    </footer>
+
+    <template id="event-item">
+      <li class="event">
+        <a class="event__shot" target="_blank" rel="noopener noreferrer">
+          <img class="event__img" alt="" loading="lazy" />
+        </a>
+        <div class="event__body">
+          <p class="event__head">
+            <span class="event__camera"></span>
+            <span class="event__zone"></span>
+          </p>
+          <p class="readout event__time"></p>
+        </div>
+      </li>
+    </template>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

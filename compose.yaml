@@ -11,5 +11,28 @@ services:
       - ./storage:/media/frigate
     tmpfs:
       - /tmp/cache:size=1000000000
+    # Native, authenticated Frigate UI. Loopback only. Port 5000 (the API this
+    # stack proxies) is deliberately never published.
     ports:
       - "127.0.0.1:8971:8971"
+
+  dashboard:
+    image: nginx:1.28.0-alpine
+    restart: unless-stopped
+    depends_on:
+      - frigate
+    volumes:
+      # Static UI, read-only. The docroot is read-only, so nothing can be written
+      # into it: a nested mountpoint there would not exist and the mount fails.
+      - ./dashboard:/usr/share/nginx/html:ro
+      - ./dashboard/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Design tokens stay canonical at the repository root and are mounted
+      # outside the docroot, then served by one exact /tokens.css alias.
+      - ./tokens.css:/etc/nginx/zone-tokens.css:ro
+    # Loopback only, and read-only by proxy policy: the UI itself needs no
+    # authentication, so it must never be reachable from the network.
+    ports:
+      - "127.0.0.1:8088:80"
+    # No default network exposure beyond the two loopback mappings above.
+    security_opt:
+      - no-new-privileges:true

@@ -1,3 +1,19 @@
+# Four-camera Frigate zone prototype.
+#
+# Zones cover the full normalised frame on purpose: whole-view monitoring is the
+# intended initial default, so every view is covered from the first run instead
+# of only the part of the scene somebody happened to outline. A full-frame zone
+# is also noisier — expect more events than you want to read — so narrow each one
+# to the area you actually care about (a door, a driveway, a stairwell) in the
+# Frigate zone editor at https://localhost:8971/settings. Each camera keeps its
+# own independent zone; the four zones never overlap or share state.
+#
+# Camera streams are placeholders too. Fill .env (never this file) with the real
+# RTSP URLs, passwords written raw. A camera that cannot be reached degrades on
+# its own: Frigate keeps retrying that feed while the other three carry on, and
+# it recovers by itself once the camera answers again. Set enabled: false on a
+# camera only to remove it from the suite deliberately.
+
 mqtt:
   enabled: false
 
@@ -7,6 +23,9 @@ detectors:
     device: CPU
 
 model:
+  # Must match the bundled OpenVINO tensor exactly (ssdlite_mobilenet_v2 is
+  # 300x300). Changing these breaks inference; the capture size below is what
+  # you tune instead.
   width: 300
   height: 300
   input_tensor: nhwc
@@ -14,23 +33,33 @@ model:
   path: /openvino-model/ssdlite_mobilenet_v2.xml
   labelmap_path: /openvino-model/coco_91cl_bkgr.txt
 
+# Detection resolution and rate for every camera. This is independent of the
+# model tensor above: frames are captured at 352x288 and resized to 300x300
+# before inference, so the four streams stay cheap on CPU.
+detect:
+  width: 352
+  height: 288
+  fps: 3
+
 cameras:
-  courtyard:
+  camera_1:
     ffmpeg:
       inputs:
-        - path: "{FRIGATE_CAMERA_RTSP_URL}"
+        - path: "{FRIGATE_CAMERA_1_RTSP_URL}"
           input_args: preset-rtsp-generic
           roles:
             - detect
-    detect:
-      fps: 5
+    # detect width/height/fps are inherited from the global block above.
+    # Add a per-camera detect: block here only to override one camera.
     objects:
       track:
         - person
     zones:
-      courtyard_area:
-        # Example only: redraw the courtyard boundary in the Frigate zone editor.
-        coordinates: "0.30,0.35,0.70,0.35,0.70,0.85,0.30,0.85"
+      camera_1_area:
+        # Deliberate default: every part of this view counts, so no area is
+        # silently unwatched. Narrow it to what you care about when you know
+        # the scene.
+        coordinates: "0,0,1,0,1,1,0,1"
         inertia: 3
         loitering_time: 3
         objects:
@@ -40,13 +69,130 @@ cameras:
         labels:
           - person
         required_zones:
-          - courtyard_area
+          - camera_1_area
     snapshots:
       enabled: true
       timestamp: true
       bounding_box: true
       required_zones:
-        - courtyard_area
+        - camera_1_area
+      retain:
+        default: 3
+    record:
+      enabled: false
+
+  camera_2:
+    ffmpeg:
+      inputs:
+        - path: "{FRIGATE_CAMERA_2_RTSP_URL}"
+          input_args: preset-rtsp-generic
+          roles:
+            - detect
+    # detect width/height/fps are inherited from the global block above.
+    # Add a per-camera detect: block here only to override one camera.
+    objects:
+      track:
+        - person
+    zones:
+      camera_2_area:
+        # Deliberate default: every part of this view counts, so no area is
+        # silently unwatched. Narrow it to what you care about when you know
+        # the scene.
+        coordinates: "0,0,1,0,1,1,0,1"
+        inertia: 3
+        loitering_time: 3
+        objects:
+          - person
+    review:
+      alerts:
+        labels:
+          - person
+        required_zones:
+          - camera_2_area
+    snapshots:
+      enabled: true
+      timestamp: true
+      bounding_box: true
+      required_zones:
+        - camera_2_area
+      retain:
+        default: 3
+    record:
+      enabled: false
+
+  camera_3:
+    ffmpeg:
+      inputs:
+        - path: "{FRIGATE_CAMERA_3_RTSP_URL}"
+          input_args: preset-rtsp-generic
+          roles:
+            - detect
+    # detect width/height/fps are inherited from the global block above.
+    # Add a per-camera detect: block here only to override one camera.
+    objects:
+      track:
+        - person
+    zones:
+      camera_3_area:
+        # Deliberate default: every part of this view counts, so no area is
+        # silently unwatched. Narrow it to what you care about when you know
+        # the scene.
+        coordinates: "0,0,1,0,1,1,0,1"
+        inertia: 3
+        loitering_time: 3
+        objects:
+          - person
+    review:
+      alerts:
+        labels:
+          - person
+        required_zones:
+          - camera_3_area
+    snapshots:
+      enabled: true
+      timestamp: true
+      bounding_box: true
+      required_zones:
+        - camera_3_area
+      retain:
+        default: 3
+    record:
+      enabled: false
+
+  camera_4:
+    ffmpeg:
+      inputs:
+        - path: "{FRIGATE_CAMERA_4_RTSP_URL}"
+          input_args: preset-rtsp-generic
+          roles:
+            - detect
+    # detect width/height/fps are inherited from the global block above.
+    # Add a per-camera detect: block here only to override one camera.
+    objects:
+      track:
+        - person
+    zones:
+      camera_4_area:
+        # Deliberate default: every part of this view counts, so no area is
+        # silently unwatched. Narrow it to what you care about when you know
+        # the scene.
+        coordinates: "0,0,1,0,1,1,0,1"
+        inertia: 3
+        loitering_time: 3
+        objects:
+          - person
+    review:
+      alerts:
+        labels:
+          - person
+        required_zones:
+          - camera_4_area
+    snapshots:
+      enabled: true
+      timestamp: true
+      bounding_box: true
+      required_zones:
+        - camera_4_area
       retain:
         default: 3
     record:

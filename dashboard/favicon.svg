@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Zone Console">
+  <rect width="32" height="32" rx="6" fill="#1c2024" />
+  <rect x="5.5" y="8.5" width="21" height="15" rx="2" fill="none" stroke="#8fb6e8" stroke-width="1.6" />
+  <path d="M11 18.5 L15.5 13 L20 17 L25 11.5" fill="none" stroke="#a9c6ea" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+</svg>
