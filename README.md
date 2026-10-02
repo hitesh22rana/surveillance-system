@@ -1,12 +1,14 @@
 # Surveillance Console
 
-A four-camera Frigate prototype with a small dashboard. The one thing it does:
-detect a person **loitering** — 60 seconds inside a named per-camera zone — and
-snapshot it. Email and every other outbound notification is **not** wired up.
-Nothing leaves the host. The dashboard reads everything it shows, and with one
-explicitly authorised exception it can **delete a reviewed snapshot on request**;
-everything else about it is read-only. See
-[Controlled deletion](#controlled-deletion).
+A four-camera Frigate prototype with a small dashboard. What it does now: save a
+snapshot of every person and every watched animal that comes into frame, and keep
+extra ones **for review** when somebody arms entry review on Camera 1 or Camera 4
+by hand. Email and every other outbound notification is **not** wired up. Nothing
+leaves the host. The dashboard reads everything it shows, and with two explicitly
+authorised exceptions it can **delete a reviewed snapshot on request** and
+**arm or disarm entry review**; everything else about it is read-only. See
+[Controlled deletion](#controlled-deletion) and
+[Entry review](#entry-review).
 
 The live view is the camera's own main channel — 2560×1440 HEVC, the source's
 reported 25 fps, handed to the browser without re-encoding. That 25 fps is what
@@ -14,18 +16,32 @@ the channel reports, not a render rate measured in a browser. Detection runs
 separately, on its own low substream at 3 fps.
 
 - Frigate pinned to **0.18.0** (`ghcr.io/blakeblackshear/frigate:0.18.0`).
-- Four independent cameras, `camera_1` … `camera_4`, each with **two** zones on
-  the same polygon: `camera_N_area` (loitering_time 0 — somebody is on camera) and
-  `camera_N_loitering` (loitering_time 60 — tracked in-zone presence reaching a
-  minute). Alerts fire on the loitering zone; snapshots are saved on the area
-  zone.
+- Four independent cameras, `camera_1` … `camera_4`, each with **one** zone on the
+  full normalised frame: `camera_N_area`, `loitering_time: 0`, so somebody on
+  camera is somebody snapshotted. This is the snapshot trigger, not a rule.
+- **Native person alerts are off on all four cameras** (`review.alerts.enabled:
+  false`). Retaining a person is now a decision a person makes on the dashboard,
+  not something Frigate fires. Alerting on every person on every frame was never
+  the point.
+- **`camera_1_restricted` and `camera_4_restricted`** are the two areas entry
+  review is armed for. They are **not** in `config/config.example.yml`: the
+  polygons are deployment-specific and have been drawn and validated directly in the
+  running instance, and a generic full-frame placeholder in a public example
+  could end up armed. One commented example, and what arming does, are in
+  [`docs/restricted-zone.md`](docs/restricted-zone.md).
+- **The 60-second full-frame person rule is gone, on every camera.** Under it any
+  tracked person on any camera for a minute was kept forever, which with
+  full-frame zones meant essentially every walk-through. Nothing pins a person
+  now unless entry review is armed. **Records kept under the old rule are left
+  exactly as they are** — the worker only ever sets `retain_indefinitely`, and it
+  has no un-pin path and no migration, so the old pile stays until somebody
+  deletes it by hand.
 - **Animals, `camera_1` … `camera_3` only.** Those three cameras also track the ten
   COCO 91 animal classes — `bird` `cat` `dog` `horse` `sheep` `cow` `elephant`
   `bear` `zebra` `giraffe` — and those labels are in `camera_N_area`, which is
-  already `loitering_time 0`, so an animal is snapshotted the moment it is in
-  frame. They are deliberately **not** in `camera_N_loitering`: no animal can
-  reach the 60-second person threshold, and the retention worker pins an animal on
-  sight instead. `camera_4` tracks `person` and nothing else, and the worker
+  already `loitering_time: 0`, so an animal is snapshotted the moment it is in
+  frame, and the retention worker pins it on sight. That rule is **unchanged** and
+  needs no arming. `camera_4` tracks `person` and nothing else, and the worker
   refuses an animal event on `camera_4` on its own, without consulting Frigate.
   See [Animals](#animals).
 - Live view: each camera's **main** channel, restreamed by the go2rtc bundled in
@@ -42,36 +58,41 @@ separately, on its own low substream at 3 fps.
   **A saved snapshot is cut from this 352×288 substream, not from the 2560×1440
   (~4 MP) live view** — the two qualities are unrelated and the event image is the
   small one. Neither the 352×288/3 fps detection source nor the 25 fps main
-  channel changed with the loitering rule or the deletion endpoint.
+  channel changed with the entry-review rule, the arming control or the deletion
+  endpoint.
 - Detector: the bundled SSDLite MobileNetV2 on OpenVINO, CPU, tracking `person` on
   all four cameras plus the ten COCO 91 animal classes on `camera_1` … `camera_3`.
   No custom training or inference code, and no behaviour, anomaly or
-  classification model of any kind: a person loitering in a named zone, or an
-  animal on one of the first three cameras, are the only rules that exist.
+  classification model of any kind: a person entering an **armed** camera's own
+  restricted area, or an animal on one of the first three cameras, are the only
+  rules that exist.
 - Continuous recording disabled (`record.enabled: false`).
 - **Snapshots.** An ordinary snapshot is kept **6 hours**
   (`snapshots.retain.default: 0.25`, in days). Frigate's periodic cleanup runs
   about every five minutes and is what actually deletes it, so six hours is the
   nominal cutoff it is measured against, not an exact deletion time. A `person`
-  event that loitered **60 seconds in its own camera's loitering zone** is pinned
-  by the retention worker through Frigate's native `retain_indefinitely`, which
-  cleanup does not touch, so it survives until somebody deletes it. A person who
-  merely walked through is **not** pinned: that event still gets its ordinary
-  six hours, which is a behaviour change from the previous whole-frame zone. See
+  event that entered an **armed** camera's own restricted area is pinned by the
+  retention worker through Frigate's native `retain_indefinitely`, which cleanup
+  does not touch, so it survives until somebody deletes it. Everything else about
+  a person ages out on the six-hour timer. See
   [Retention and review](#retention-and-review).
-- **What the 60 seconds counts.** Frigate's loitering counter advances on tracked
-  frames with the object inside the zone, and detection runs at 3 fps, so 180
-  frames is 60 seconds. That is **tracked presence, not continuous wall-clock
-  time**: separate visits by the same tracked object can accumulate toward the
-  threshold, and nothing here establishes that it stayed still, stayed in one
-  place, or meant anything by it.
+- **What entry review says.** While armed, a kept snapshot means one thing: a
+  person was inside that camera's restricted area during the window you armed. It
+  is a **candidate for a person to look at**, and nothing more. It is not a
+  direction — a zone says where somebody was, not which side of a boundary they
+  came from. It is not an identity — the detector reports one class, `person`,
+  and cannot tell family from anyone else. And there is **no fighting, behaviour
+  or anomaly detection in this repository at all**; the object model is COCO 91,
+  which has no such class. Camera 2 and Camera 3, the internal views, are
+  deliberately given no restricted area and no automatic person retention.
 - Two loopback ports, nothing else:
   - `127.0.0.1:8971` — Frigate's own authenticated UI.
-  - `127.0.0.1:8088` — the dashboard. No login, and now one authorised write
-    path: controlled manual deletion of reviewed snapshots.
-- The `retention` container publishes **no port**. Its deletion gateway listens
-  on `0.0.0.0:8090` on the Docker network only, and refuses any request whose
-  `Host` is not the dashboard's own published address.
+  - `127.0.0.1:8088` — the dashboard. No login, and now **two** authorised write
+    paths: controlled manual deletion of reviewed snapshots, and manual arming or
+    disarming of entry review on Camera 1 and Camera 4.
+- The `retention` container publishes **no port**. Its gateway listens
+  on `0.0.0.0:8090` on the Docker network only, serves both writes, and refuses
+  any request whose `Host` is not the dashboard's own published address.
 - Target platform is **Linux + Docker**. Docker on macOS gives no guaranteed GPU
   acceleration, so detection latency measured there is not representative.
 
@@ -92,8 +113,16 @@ separately, on its own low substream at 3 fps.
 | `scripts/check_console_api.py` HTTP contract check | **PASS 2026-10-02, re-run under the animal rule** — against a disposable fake Frigate: a 61-row archive across three pages of 25, invalid `Origin`/`Host`/content type/ids, a partial failure and a native `success: false`, the fail-closed page cap, no automatic `DELETE`, plus the animal rule on both sides: a `dog` on `camera_4` refused before any request, and a `cat` on `camera_3` deleting like any other saved snapshot |
 | Static checks on the deployed files | **PASS 2026-10-02** — `docker compose config -q`, the Python compile of both check scripts and `retain.py`, `node --check dashboard/app.js`, and `nginx -t` |
 | Deployed deletion gateway | **deployed 2026-10-02** — `retain.py --serve` bound on internal `0.0.0.0:8090` with **no published port**; nginx routes the three exact paths `summary`, `events` and `delete` |
-| 60-second loitering zones, alerts gated on them | **loaded and confirmed 2026-10-02** — native `/api/config` reports all four `camera_N_area` at 0 s, all four `camera_N_loitering` at 60 s, and `record.enabled` false on all four. Behaviour is still **unmeasured**: no controlled 60-second walkthrough |
-| Live loitering protection | **one event observed 2026-10-02** — a naturally completed loitering snapshot is pinned, and three new ordinary snapshots are not. That is one event, not a rate |
+| 60-second full-frame person rule | **removed** — pins nothing on any camera now; records kept under it are left exactly as they are |
+| Native person alerts | **disabled on all four cameras** (`review.alerts.enabled: false`) in the public example |
+| Restricted areas `camera_1_restricted`, `camera_4_restricted` | **polygons drawn and validated in the running instance; not in the public example**, whose zone is a commented placeholder |
+| Manual entry arming, cameras 1 and 4 | **implemented and PASS in the disposable-upstream checks** — default disarmed, refused until Frigate reports the zone, in memory only, disarming never unpins |
+| Entry arming on the live stack | **run live 2026-10-02** — a live `POST` arm, a repeat arm and a disarm each returned a valid state and the page displayed each one; the repeat arm changed nothing. **Both cameras were left disarmed** |
+| `scripts/check_retention.py` boundary check | **PASS** — arming defaults disarmed, an entry before the arm is never pinned, re-arming keeps the original `armed_since`, a stale zone disarms the camera, animals unchanged, nothing deleted |
+| `scripts/check_console_api.py` HTTP contract check | **PASS** — 10 refusal shapes and 12 bodies refused on the arming POST, the config's RTSP credential proven absent from the status, disarming still works with the config unreadable, and the archive/delete scope identical disarmed and armed |
+| `scripts/evaluate.py --self-check` | **PASS** — the four outcomes counted separately, undefined precision/recall printed as undefined, 16 bad values refused with nothing printed |
+| **Detection accuracy, every rule, every camera** | **unmeasured — nothing has been run.** Protocol and empty templates in [`docs/evaluation.md`](docs/evaluation.md) |
+| Live loitering protection — **historical, under the removed 60-second whole-frame rule** | **one event observed 2026-10-02** — a naturally completed loitering snapshot is pinned, and three new ordinary snapshots are not. That is one event, not a rate. The rule itself no longer exists |
 | Controlled deletion through the dashboard | **done once, 2026-10-02, with the owner's explicit authorisation** — one ended experimental snapshot deleted via the dashboard `POST` (`deleted: 1`, `missing: 0`, `failed: []`, `active: 0`), its image URL then 404, no archive wipe, and the Cancel confirmation observed doing nothing |
 | Archive pagination source | **API live 2026-10-02** — `GET /api/snapshots/events` returns the archive over 25-row pages with `total`/`pages`; over 100 snapshots across 5 pages were read, including rows older than the legacy 50 |
 | Dashboard pager | **observed in a browser 2026-10-02** — the page reads `GET /api/snapshots/events` at 25 rows per page and drives `page`/`camera` from its own controls, including a latest-page jump and a clamp to the last page; the measured behaviour is the final browser validation below |
@@ -101,7 +130,7 @@ separately, on its own low substream at 3 fps.
 | Ordinary six-hour expiry, watched end to end | **not done** — applied and confirmed loaded in native `/api/config`; nobody waited the window out |
 | Snapshots already kept under the old rule | **kept, and still a manual job** — nothing unpins them; only newly captured ordinary snapshots are on the six-hour timer |
 | Zones drawn on real boundaries | **not done** — every zone is the full frame |
-| COCO 91 animal rule on `camera_1` … `camera_3` | **loaded and verified 2026-10-02** — native internal `/api/config` reports person plus all ten animal classes in tracking and area zones on cameras 1–3; camera 4 stays person-only, all loitering zones stay person-only at 60 seconds, recording stays disabled. Runtime config was schema-validated before saving; private backup is ignored by Git. Real animal accuracy is not yet measured |
+| COCO 91 animal rule on `camera_1` … `camera_3` | **loaded and verified 2026-10-02** — native internal `/api/config` reports person plus all ten animal classes in tracking and area zones on cameras 1–3; camera 4 stays person-only; the two restricted zones are person-only at `inertia: 3`, `loitering_time: 0`; **no loitering zone remains on any camera**, the `camera_N_loitering` zones at 60 seconds having been removed; recording stays disabled. Runtime config was schema-validated before saving; private backup is ignored by Git. Real animal accuracy is not yet measured |
 | Retention worker pinning animals | **verified against a fake Frigate 2026-10-02** — `scripts/check_retention.py` pins all ten labels on cameras 1–3 with no zone at all, refuses the same labels on `camera_4` before any POST, and confirms the listing/deleting gate accepts the pinned rows and refuses the camera-4 ones. Not exercised against a real animal event, because none exists yet |
 | Controlled zone walkthrough, alert timing, night, false positives | **not run**, **not verified** |
 | Animal detection accuracy | **not verified** — no animal has been on any of these four feeds under the new rule; misses are expected at 352×288 |
@@ -203,13 +232,15 @@ What was actually run, and what it does not show:
   **deployed** on internal `0.0.0.0:8090` with **no published port**, and nginx
   carries the three exact routes `summary`, `events` and `delete`. `scripts/check.py`
   then **passed live** against that deployed gateway.
-- **The zones are loaded, and one qualifying event was seen.** Native `/api/config`
-  reports all four `camera_N_area` at `loitering_time: 0`, all four
-  `camera_N_loitering` at `60`, and `record.enabled: false`, with detection at
-  3 FPS. One naturally completed loitering snapshot is **pinned**, and three new
-  ordinary snapshots are **not**. That is a single observation per direction, not
-  a measured rate, and **no controlled 60-second walkthrough was performed**, so
-  no timing or accuracy claim rests on it.
+- **The zones are loaded, and one qualifying event was seen — historical, under the
+  removed 60-second rule.** Native `/api/config` reported all four
+  `camera_N_area` at `loitering_time: 0`, all four `camera_N_loitering` at `60`,
+  and `record.enabled: false`, with detection at 3 FPS. One naturally completed
+  loitering snapshot was **pinned**, and three new ordinary snapshots were
+  **not**. That is a single observation per direction, not a measured rate, and
+  **no controlled 60-second walkthrough was performed**, so no timing or accuracy
+  claim rests on it. **No loitering zone exists now**; that rule is gone and the
+  entry-review rule below is the one in force.
 - **One deletion, performed deliberately, 2026-10-02.** With the owner's explicit
   authorisation, one **ended experimental** snapshot was deleted from the
   dashboard: the reply was `deleted: 1`, `missing: 0`, `failed: []`, `active: 0`,
@@ -279,12 +310,16 @@ This recorder locks an account out after repeated failed logins — 240 seconds,
   is open to guessing.
 
 Then draw the real zones on each camera in Frigate's own zone editor at
-<https://localhost:8971/settings> (**Configuration → Zones and masks**). There are
-two per camera: draw `camera_N_loitering` around the place worth watching, and
-keep `camera_N_area` identical to it so the snapshot you keep matches the one the
-alert is about. The example polygons are the full frame `0,0,1,0,1,1,0,1` so the
-stack starts cleanly; until you redraw them, "loitered" means "was on camera for a
-minute", which is nobody's idea of a threshold in a real scene.
+<https://localhost:8971/settings> (**Configuration → Zones and masks**). Leave
+`camera_N_area` as the full-frame `loitering_time: 0` snapshot trigger it already
+is, and draw the place worth watching as `camera_N_restricted` on **Camera 1 and
+Camera 4 only** — person-only, `loitering_time: 0`, so crossing the line is the
+whole event. There is no second, timed zone to draw: the 60-second
+`camera_N_loitering` rule has been removed, and Camera 2 and Camera 3 get no
+restricted area at all. The example polygon is the full frame
+`0,0,1,0,1,1,0,1`, which is right for the area zone and **wrong** for a restricted
+one — a full-frame restricted area arms every pixel. See
+[`docs/restricted-zone.md`](docs/restricted-zone.md).
 
 Validate, then start:
 
@@ -344,14 +379,15 @@ What it deliberately does not do:
   narrowing by camera happens in the gateway, before the page is cut, rather than
   in the browser.
 - It exposes no config, no logs, no credentials, no restart path, and no write
-  endpoint other than the one controlled deletion call described below. `GET` and
-  `HEAD` on the reads; everything else is refused, and every other `/api` path is
-  404. The browser-side code contains exactly one write, the reviewed-deletion
-  `POST`, and nothing to sign in to. The page is a viewer plus a delete button a
-  person has to aim, so the review workflow around it stays a person's decision.
+  endpoint other than the two controlled calls described below — the reviewed
+  deletion and the entry arming. `GET` and `HEAD` on the reads; everything else is
+  refused, and every other `/api` path is 404. The browser-side code contains
+  exactly two writes, the reviewed-deletion `POST` and the arming `POST`, and
+  nothing to sign in to. The page is a viewer plus two buttons a person has to
+  aim, so the review workflow around it stays a person's decision.
 - Frigate's API port 5000 is never published. nginx reaches it on the internal
   Docker network as `frigate:5000`, and go2rtc as `frigate:1984`. The retention
-  container's deletion gateway is reached as `retention:8090`, on the same
+  container's gateway is reached as `retention:8090`, on the same
   internal network, with no published port of its own.
 
 Zones are drawn in Frigate's own UI, not here. The dashboard does not link to it:
@@ -371,53 +407,73 @@ Two different lifetimes, and it matters which is which.
   in days. Frigate's periodic cleanup — about every five minutes — is what
   actually deletes it, so six hours is a **nominal cutoff, not an exact
   ceiling**: a file goes at the first cleanup after it passes 0.25 days.
-- **A `person` event that loitered 60 seconds in its own camera's loitering zone
-  is kept until you delete it. So is an animal on `camera_1` … `camera_3`.** The
-  `retention` service (`scripts/retain.py`) polls Frigate every 30 seconds and sets
-  Frigate's own `retain_indefinitely` flag on exactly those events. Periodic cleanup
-  skips a retained event, so it survives on its own, with no local state: a restart
+- **A `person` event that entered an armed camera's restricted area is kept until
+  you delete it. So is an animal on `camera_1` … `camera_3`.** The `retention`
+  service (`scripts/retain.py`) polls Frigate every 30 seconds and sets Frigate's
+  own `retain_indefinitely` flag on exactly those events. Periodic cleanup skips
+  a retained event, so it survives on its own, with no local state: a restart
   neither re-pins nor forgets. The worker publishes no port, opens no database of
   its own, holds no credential, and reads nothing but the internal API. Both
-  lifetimes are Frigate's own bookkeeping; go2rtc restreams the live view and holds
-  nothing.
+  lifetimes are Frigate's own bookkeeping; go2rtc restreams the live view and
+  holds nothing.
 
-The two zones per camera are what make that distinction possible.
 `camera_N_area` is the whole frame with `loitering_time: 0`, so **every** person
-event still gets a snapshot and still gets its ordinary six hours.
-`camera_N_loitering` is the same polygon with `loitering_time: 60`, and only
-events that carried it are pinned. **This is a behaviour change**: under the
-previous single full-frame zone, essentially every person snapshot was kept
-forever, and a walk-through is now worth only six hours.
+event still gets a snapshot and still gets its ordinary six hours. It is a
+snapshot trigger and nothing more.
 
-What that does **not** do is clean up the old pile. Events already pinned under
-the previous rule keep their `retain_indefinitely` flag — the worker only ever
-sets it, never clears it, and there is no migration — so **previously kept
-snapshots stay until somebody deletes them by hand.** Only newly captured ordinary
-snapshots are on the six-hour timer.
+What that does **not** do is clean up the old pile. Events pinned under the
+removed 60-second rule keep their `retain_indefinitely` flag — the worker only
+ever sets it, never clears it, and there is no migration — so **previously kept
+snapshots stay until somebody deletes them by hand.** Only newly captured
+ordinary snapshots are on the six-hour timer.
 
-The example loitering zones are still the whole frame, so "loitered" currently
-means "somebody was on camera for a minute": waiting for a door, a delivery, a
-phone call, or a gate. That is a **geometry prototype, not a judgement about
-danger.** 60 seconds is a starting threshold for "worth a human look", long
-enough to exclude a passing step and short enough to see inside one shift. It
-assesses no risk, infers no intent, and models nothing; narrowing the polygons to
-the places that matter is the next piece of work, and no claim of accuracy rests
-on the current ones.
+## Entry review
+
+Camera 1 and Camera 4 only, and **off until somebody switches one on**. The
+dashboard carries the two controls; the worker holds the flag.
+
+- **A kept entry is a candidate, not a finding.** A person was inside that
+  camera's restricted area during the window you armed. Nothing more.
+- **Not a direction.** Camera 1's monitored area 1 and Camera 4's area_4
+  approach are both boundary facts. A zone says where somebody was; which side
+  they came from needs an ordered track across frames, and there is none here.
+- **Not an identity.** One class, `person`. Family is not distinguishable.
+- **Restarting the service disarms both cameras**, and arming again is a
+  deliberate act. Arming and disarming are the two dashboard controls and the one
+  controlled call behind them; there is no schedule and no command-line route to
+  set the flag.
+- **An entry already under way when you arm can be missed**, because a track has
+  one start time for the whole time somebody was on camera. Arming never reaches
+  backwards: an event that began before the arm is not kept.
+- **Disarming stops further snapshots being kept and never releases one already
+  kept.** The pile from the removed 60-second rule is untouched.
+- **The camera can only be armed once Frigate reports its zone** as person-only
+  at `loitering_time: 0`. The worker reads Frigate's `/api/config` internally for
+  that and keeps two booleans; a config it cannot read leaves both cameras *not
+  ready* and the button disabled.
+- **Camera 2 and Camera 3 are deliberately not watched for this at all.** They
+  are internal views where ordinary family movement must not accumulate,
+  and **there is no fighting or behaviour detection in this repository** to
+  substitute for it. Nothing here assesses risk, intent or conflict.
+
+See [`docs/restricted-zone.md`](docs/restricted-zone.md) for the commented zone
+example and the arming details, and
+[`docs/evaluation.md`](docs/evaluation.md) for how accuracy is to be measured.
 
 **Reviewing.** The dashboard reads the archive through the paginated source,
 **25 rows at a time** across the four cameras; each retained row carries a *Kept
-for review* badge. On 2026-10-02 that read reported **over 100 snapshots across 5
-pages**, so the pager is what reaches rows older than the legacy 50. Page,
+for review* badge, and a person row kept under the old rule reads *Previously
+kept*. The archive-wide count and the delete scopes are unchanged by any of this:
+a `person` row on **all four** cameras is listable and deletable whatever the
+retention policy is doing, so an old kept record can always be removed. Page,
 camera filter and a jump back to the newest page are part of the page itself, the
 page count comes from the source rather than being counted here, and a page past
 the last lands on the last rather than erroring. The poll re-reads only the
 newest page, so a page being read through history does not shift under the
-operator. **Browser review of the pager was completed 2026-10-02** and its
-measured results are the **Final browser validation** row of the Status table;
-anything further back is in Frigate's own **Explore** view.
-While the worker is running,
+operator. While the worker is running,
 `docker compose logs -f retention` reports one pass per 30 seconds with pinned,
-already-retained and skipped counts — that line is the only sign it is alive.
+already-retained and skipped counts, and which cameras are armed — that line is
+the only sign it is alive.
 
 **Deleting, after you have looked at it.** Two ways, and the second one is the
 operator's escape hatch for when the gateway is not running:
@@ -441,10 +497,10 @@ before it sees them. Anything it did pin keeps growing until it is deleted by
 hand. There is no cap, and no automatic expiry — that is the point of keeping
 evidence.
 
-**Not implemented, and not implied anywhere:** any behaviour, anomaly or
-classification detection beyond "a person loitering in a named zone". The 60
-second threshold is a timer, not a model, and it makes no claim about what
-anybody is doing. There is no such model in this repository.
+**Not implemented, and not implied anywhere:** any behaviour, anomaly, fighting or
+classification detection. The object model is COCO 91 and there is no such class
+in it. Nothing in this repository infers a direction of travel, identifies a
+person, or scores risk.
 
 ## Animals
 
@@ -455,16 +511,14 @@ as `person`. `camera_4` tracks `person` and nothing else.
 |---|---|---|
 | Tracked on | all four cameras | `camera_1` … `camera_3` |
 | In `camera_N_area` (`loitering_time: 0`) | yes | yes — snapshotted on sight |
-| In `camera_N_loitering` (`loitering_time: 60`) | yes | **no** |
-| Pinned by `retain.py` when | it carried its own loitering zone | it was seen, no zone needed |
+| In `camera_N_restricted` | camera_1, camera_4 only, armed by hand | **no** |
+| Pinned by `retain.py` when | it entered its own armed restricted area | it was seen, no zone needed |
 | Row text reads | `Monitored area` | `Dog · Monitored area` — the class, then the area |
 | Dashboard row reads | `Kept for review` | `Kept for review` |
 
 The zones carry the whole rule. An animal label sits in `camera_N_area`, which is
-already `loitering_time: 0`, so it is snapshotted the instant it is in frame. It is
-deliberately absent from `camera_N_loitering`, so no animal can reach the 60-second
-person threshold and the worker pins it on sight instead — a stray dog does not get
-60 free seconds while a counter it will never satisfy runs.
+already `loitering_time: 0`, so it is snapshotted the instant it is in frame, and
+the worker pins it on sight — no arming, no restricted area, no person rule.
 
 Three things this is **not**.
 
@@ -490,7 +544,8 @@ nothing here measures it.
 
 **One consequence to know about.** Because an animal is pinned on sight, a false
 positive is **permanent** — it holds `retain_indefinitely` until somebody deletes
-it, exactly like a loitering person. All ten classes stay tracked on cameras 1–3,
+  it, exactly like a person kept by an armed restricted area. All ten classes stay
+  tracked on cameras 1–3,
 as asked. Which of them misfire on a 352×288 frame, and how often, is unmeasured
 on these feeds, so no class is named here as the likely offender. If the archive
 fills with one you do not want, the fix is one line in `config/config.example.yml`
@@ -503,7 +558,8 @@ gate does not depend on Frigate having been reconfigured.
 
 ## Controlled deletion
 
-The one write path in the project, added on the owner's explicit instruction. It
+One of the two write paths in the project, added on the owner's explicit
+instruction. It
 replaces the previous "there is no delete button anywhere, by design" position:
 deleting a reviewed snapshot is now possible from the page, and **still only
 after a person decides to.**
@@ -614,11 +670,19 @@ python3 scripts/check_console_api.py # the --serve gateway: refusals, selection,
 ```
 
 Both run the real `scripts/retain.py` as a subprocess and read only what left the
-process and what reached the fake upstream. **Both pass as of 2026-10-02** —
-`check_retention.py` under the two-zone rule as well as the previous whole-frame
-one, and `check_console_api.py` against a 60-row archive over three pages of 25.
-Neither says anything about the live stack; that evidence is recorded separately in
+process and what reached the fake upstream. **Both pass** — `check_retention.py`
+for the arming and animal rules, and `check_console_api.py` for the four HTTP
+endpoints including the arming POST's refusals. Neither says anything about the
+live stack; that evidence is recorded separately in
 [`docs/validation.md`](docs/validation.md).
+
+Accuracy is scored from CSVs a person filled in by hand, not from a live stack:
+
+```sh
+python3 scripts/evaluate.py --self-check
+python3 scripts/evaluate.py --trials docs/evaluation/trials.csv \
+                            --windows docs/evaluation/windows.csv
+```
 
 There is no CI workflow in this repository.
 
@@ -627,6 +691,38 @@ There is no CI workflow in this repository.
 - [`docs/spec.md`](docs/spec.md) — the phased plan, and what is implemented.
 - [`docs/validation.md`](docs/validation.md) — what was actually run, and the
   manual checklist including UI screenshot checks.
+- [`docs/restricted-zone.md`](docs/restricted-zone.md) — the commented zone
+  example, what arming does, and what a kept entry is not.
+- [`docs/evaluation.md`](docs/evaluation.md) — the accuracy protocol, and the two
+  empty CSV templates it is recorded in.
+
+## Known limitations
+
+Stated plainly, because nothing below has been measured and nothing below is
+fixed by it.
+
+- **No accuracy figure exists** for any rule, on any camera, in any lighting.
+  The protocol is written down and the templates are empty.
+- **The saved snapshots cannot show what was missed.** Frigate only writes an
+  image for something it detected, so the archive is a list of hits by
+  construction. Recall needs an observer's ground truth recorded separately.
+- **A kept entry is not a direction.** Camera 1's monitored area 1 and
+  Camera 4's area_4 approach are boundary questions a zone cannot answer; that
+  needs an ordered track across frames, which does not exist here.
+- **Family is not distinguishable.** One class, `person`.
+- **There is no fighting, behaviour or anomaly detection**, and none is
+  approximated by this. Camera 2 and Camera 3 have no restricted area and no
+  automatic person retention, by decision.
+- **An entry already under way when you arm can be missed.** A track has one
+  start time, and arming never reaches backwards past it.
+- **Arming is forgotten on every restart**, which is the intended direction to
+  forget in, but does mean a restart during a window you cared about loses that
+  window.
+- **An animal false positive is permanent**, because that pin needs no arming
+  and has no expiry.
+- **Detection is 352×288 at 3 fps** and has not been shown to be the right rate.
+  A saved snapshot is cut from that small frame, not from the 2560×1440 live
+  view.
 
 ## Run notes
 
