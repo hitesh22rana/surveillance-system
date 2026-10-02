@@ -1,4 +1,4 @@
-/* Surveillance Console — live view of four cameras, with manual snapshot review.
+/* Surveillance console — live view of four cameras, with manual snapshot review.
  *
  * Rules this file follows on purpose:
  *   - Every value shown is read from the camera service or counted from what it
@@ -27,6 +27,19 @@
  *     asks for a different view, and Back restores them and reads that page
  *     again. A poll never writes history, and the worker's own clamp is written
  *     back by replacement so the URL always names the page actually on screen.
+ *   - Paging is three buttons and one read-only line saying which page is on
+ *     screen. A thousand pages and eight pages are the same four controls, so
+ *     the page count is never allowed to become a layout or a list to pick from.
+ *   - Each camera card is one always-open, non-modal <dialog> styled to sit
+ *     inline. Expanding closes that same element and reopens it with
+ *     showModal(), so the frame, the <video> and the go2rtc player are never
+ *     moved, cloned or re-parented: the stream before and after is the one
+ *     session that was already open, not a second one. Minimising puts the very
+ *     same element back inline.
+ *   - One reusable <dialog> views every snapshot. It is handed the href off the
+ *     row's own anchor, and only after that href has been checked to be a
+ *     same-origin path of the shape the proxy serves. A modified or middle click
+ *     is left to the browser, so the link is still a real link.
  *   - Deleting a snapshot is the one write this page can make, and it takes an
  *     explicit confirmation: two fixed endpoints, one POST, no retry, a finite
  *     timeout, and a captured id list so nothing that happens while the
@@ -58,6 +71,20 @@
   });
 
   const LOITERING_LABEL = "Loitering ≥60 s";
+
+  /* The ten COCO 91 animal classes, and the three cameras that watch for them.
+   * These mirror config/config.example.yml and scripts/retain.py: the worker pins
+   * an animal on sight and never for loitering, so an animal row is held without
+   * ever carrying camera_N_loitering and this page has to say "Kept for review"
+   * from the label rather than from the zone. camera_4 tracks person only. */
+  const ANIMAL_LABELS = Object.freeze([
+    "bird", "cat", "dog", "horse", "sheep", "cow",
+    "elephant", "bear", "zebra", "giraffe",
+  ]);
+  const ANIMAL_CAMERAS = Object.freeze(["camera_1", "camera_2", "camera_3"]);
+
+  const isAnimal = (event) =>
+    ANIMAL_LABELS.includes(event.label) && ANIMAL_CAMERAS.includes(event.camera);
 
   /* The only two paths this page may write to, both served by the retention
    * worker, both fixed: no template, no query string, no second shape. */
@@ -100,6 +127,12 @@
   // "<frame_time>-<rand_id>": timestamp with optional decimal, hyphen, 6 chars.
   const EVENT_ID = /^[0-9]+(?:\.[0-9]+)?-[a-z0-9]{6}$/;
 
+  /* The one path a snapshot may be read from, on this origin only. A snapshot
+   * the viewer is offered has to be one of this page's own already-validated
+   * tracker ids at the fixed path the proxy serves; nothing else is ever put in
+   * front of it, whatever an anchor somewhere in the document happens to say. */
+  const SNAPSHOT_PATH = /^\/api\/events\/[0-9]+(?:\.[0-9]+)?-[a-z0-9]{6}\/snapshot\.jpg$/;
+
   const $ = (id) => document.getElementById(id);
 
   const el = {
@@ -109,6 +142,7 @@
     noticeText: $("notice-text"),
     retry: $("retry"),
     retryLabel: $("retry-label"),
+    feeds: $("feeds"),
     filters: $("filters"),
     tally: $("events-tally"),
     selectShown: $("select-shown"),
@@ -123,10 +157,16 @@
     confirmCancel: $("delete-cancel"),
     confirmButton: $("delete-confirm"),
     confirmLabel: $("delete-confirm-label"),
+    shotDialog: $("snapshot-dialog"),
+    shotStage: $("snapshot-stage"),
+    shotCaption: $("snapshot-caption"),
+    shotImage: $("snapshot-image"),
+    shotState: $("snapshot-state"),
+    shotClose: $("snapshot-close"),
     events: $("events"),
     eventsEmpty: $("events-empty"),
     pagePrev: $("page-prev"),
-    pageNumbers: $("page-numbers"),
+    pageStatus: $("page-status"),
     pageNext: $("page-next"),
     pageLatest: $("page-latest"),
     statLive: $("stat-live"),
@@ -161,9 +201,10 @@
   for (const camera of CAMERAS) {
     const root = document.querySelector('.feed[data-camera="' + camera + '"]');
     if (!root) continue;
-    cards.set(camera, {
+    const card = {
       camera,
       root,
+      panel: root.querySelector(".feed__panel"),
       frame: root.querySelector(".feed__frame"),
       placeholder: root.querySelector(".feed__placeholder"),
       liveText: root.querySelector(".feed__live-text"),
@@ -171,6 +212,8 @@
       detectText: root.querySelector(".feed__detect-text"),
       detectTick: root.querySelector(".feed__detect .tick"),
       stamp: root.querySelector(".feed__stamp"),
+      expanded: false,
+      opener: null, // what to hand focus back to when the card is minimised
       live: {
         player: null,
         video: null,
@@ -181,16 +224,62 @@
         token: 0,
         timer: null,
       },
-    });
+    };
+    cards.set(camera, card);
+
+    // The panel is the card: the same element at rest and expanded, so this is
+    // the only place a dialog is ever wired.
+    if (card.panel) {
+      const panel = card.panel;
+      panel.addEventListener("close", () => {
+        // A modal close is an ask to minimise. The close() on the way into
+        // showModal() also lands here, but by then the dialog is open again, so
+        // the two are told apart by the flag rather than by a guess.
+        if (panel.open) return;
+        minimizeCard(card);
+      });
+      // The backdrop, and the dialog's own padding, are the dialog element: there
+      // is nothing behind a modal one to hit. At rest the same element is a plain
+      // inline card, so it only ever closes the act of minimising a card that is
+      // actually expanded.
+      panel.addEventListener("click", (event) => {
+        if (!card.expanded || event.target !== panel) return;
+        panel.close();
+      });
+    }
   }
 
+  /* The one card that is expanded. A native modal takes the top layer, so a
+   * second one is never opened underneath the first. */
+  let expandedCard = null;
+
   /* ------------------------------------------------------------ helpers -- */
+
+  /* Native modal dialogs do not stop the page behind them scrolling, so the
+   * scroll is held for exactly as long as one is open and handed straight back.
+   * Counted rather than toggled, so a dialog that closes for a reason of its own
+   * can never unlock a page another one is still holding. */
+  let scrollLocks = 0;
+
+  function lockScroll() {
+    if (scrollLocks++ === 0) document.documentElement.style.overflow = "hidden";
+  }
+
+  function releaseScroll() {
+    if (scrollLocks === 0) return;
+    if (--scrollLocks === 0) document.documentElement.style.overflow = "";
+  }
 
   const numberOrNull = (value) =>
     typeof value === "number" && Number.isFinite(value) ? value : null;
 
   const isObject = (value) =>
     Boolean(value) && typeof value === "object" && !Array.isArray(value);
+
+  /* The one word the upstream reports for what it saw. Anything that is not a
+   * plain string is not a word, so the row falls back to the same word for every
+   * case rather than printing whatever the upstream happened to send. */
+  const textOr = (value, fallback) => (typeof value === "string" && value ? value : fallback);
 
   const clockTime = (ms) => {
     const d = new Date(ms);
@@ -226,12 +315,14 @@
   };
 
   /* Retention, stated from what this event carries and never assumed. An
-   * ordinary row expires after the six hours the camera service keeps it; a row
-   * held by the secondary zone is held for review; a row held without that zone
-   * is from the older archive, before the 60 s zone existed. */
+   * ordinary row expires after the six hours the camera service keeps it. A row
+   * held because it reached the 60 s zone is held for review. A row held because
+   * an animal was seen on a camera that watches for them is held for review too,
+   * and never carries the loitering zone. A person row that is held without that
+   * zone is from the older archive, before the 60 s zone existed. */
   function retentionText(event) {
     if (!isKept(event)) return "6-hour retention";
-    return inLoiterZone(event) ? "Kept for review" : "Previously kept";
+    return inLoiterZone(event) || isAnimal(event) ? "Kept for review" : "Previously kept";
   }
 
   /* A count the service reported, accepted only when it is already a whole
@@ -649,6 +740,68 @@
     for (const card of cards.values()) renderCard(card);
   }
 
+  /* ------------------------------------------------------------- expand -- */
+
+  /* The card is expanded, not moved. showModal() refuses a dialog that is still
+   * open, so this one is closed and reopened as the same element: the frame, the
+   * <video> and the go2rtc element inside it keep the identical parent they have
+   * at rest. Nothing is cloned, re-parented or re-created, so the main stream is
+   * the one session that was already open — not a second one, and not a dropped
+   * one. Only the presentation and the top layer change. */
+  function expandCard(card, opener) {
+    if (!card.panel || card.expanded) return;
+    if (expandedCard) minimizeCard(expandedCard);
+
+    card.expanded = true;
+    expandedCard = card;
+    // The control the operator used, taken from the click rather than from
+    // activeElement: a browser that leaves buttons unfocused on click would
+    // otherwise hand focus back to the top of the document.
+    card.opener = opener instanceof HTMLElement ? opener : document.activeElement;
+
+    // A rest-state card is a group of camera facts, not a dialog. Dropping the
+    // override hands the element back to the semantics its open state implies.
+    card.panel.removeAttribute("role");
+    card.panel.close();
+    card.panel.showModal();
+    lockScroll();
+
+    const close = card.panel.querySelector('[data-feed="close"]');
+    if (close) close.focus();
+  }
+
+  /* Minimising is the same element opened inline again, so the picture is
+   * exactly where the operator last saw it. close() is a no-op on a dialog that
+   * is already shut, which is how this serves both the operator's own close
+   * control and the close event a dismiss raises. */
+  function minimizeCard(card) {
+    if (!card.panel || !card.expanded) return;
+    card.expanded = false;
+    if (expandedCard === card) expandedCard = null;
+    card.panel.setAttribute("role", "group");
+    card.panel.close();
+    card.panel.show();
+    releaseScroll();
+
+    const opener = card.opener;
+    card.opener = null;
+    // The opener is usually still there, but the archive is rebuilt under the
+    // operator's hands, so a detached one is passed over rather than revived.
+    if (opener && opener.isConnected) opener.focus();
+  }
+
+  el.feeds.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-feed]");
+    if (!button || !el.feeds.contains(button)) return;
+    const card = cards.get(button.dataset.camera);
+    if (!card) return;
+    if (button.dataset.feed === "expand") expandCard(card, button);
+    // The close icon and a click on the backdrop are one act, and both take the
+    // same road: shut the dialog, and let its own close event put the card back
+    // inline.
+    else if (card.expanded) card.panel.close();
+  });
+
   function renderStrip() {
     let playing = 0;
     let detecting = 0;
@@ -706,6 +859,14 @@
     return isObject(event) && typeof event.id === "string" && EVENT_ID.test(event.id);
   }
 
+  /* The class the detector reported, in the same case as the rest of the row. It
+   * is read off the event and is never guessed from the camera: camera_1 watches
+   * for eleven classes, so the camera says nothing about which one was seen. */
+  const classLabel = (event) => {
+    const name = textOr(event.label, "");
+    return name ? name.charAt(0).toUpperCase() + name.slice(1) : "";
+  };
+
   const zoneLabel = (event) => {
     const list = Array.isArray(event.zones) ? event.zones : [];
     // Both known zones are stripped: the area is stated in words and the tracked
@@ -713,8 +874,13 @@
     const named = list.filter(
       (zone) => zone !== REQUIRED_ZONE[event.camera] && zone !== LOITERING_ZONE[event.camera]
     );
-    if (named.length > 0) return named.join(" + ");
-    return "Monitored area";
+    const area = named.length > 0 ? named.join(" + ") : "Monitored area";
+    // An animal row has to say which animal it was. It is pinned on sight, so it
+    // carries no loitering flag, and until it does the zone text is the only line
+    // on the row that can name it: a held row that reads only "Monitored area"
+    // says a camera saw something, not what. A person row is unchanged — "person"
+    // is the only class it ever carries, so naming it would be noise.
+    return isAnimal(event) ? classLabel(event) + " · " + area : area;
   };
 
   /* The rows of the page on screen. Filtering is the worker's, paging is this
@@ -723,7 +889,6 @@
   const visibleRows = () => state.rows;
 
   let renderedSignature = null;
-  let renderedPages = null;
 
   // Rows are rebuilt from the template, and a row's checkbox is remembered by
   // node rather than by a data attribute, so a tracker id is never written into
@@ -736,6 +901,8 @@
     renderSelection();
   }
 
+  /* The page itself is stated once, in the pager's own status line, so the tally
+   * stops repeating it here. */
   function tallyText() {
     if (!state.eventsRead) {
       if (state.eventsError !== null) {
@@ -747,9 +914,7 @@
     if (state.total === 0) return "No saved detections · " + scope;
     // The worker clamps a page past the end, so this is a shape this page does not
     // expect rather than a state it expects: it is said plainly, never as a range.
-    if (state.rows.length === 0) {
-      return "No detections on this page · page " + state.page + " of " + state.pages + " · " + scope;
-    }
+    if (state.rows.length === 0) return "No detections on this page · " + scope;
     const from = (state.page - 1) * state.pageSize + 1;
     return (
       "Showing " +
@@ -758,106 +923,32 @@
       (from + state.rows.length - 1) +
       " of " +
       state.total +
-      " · page " +
-      state.page +
-      " of " +
-      state.pages +
       " · " +
       scope
     );
   }
 
-  /* How many page numbers are ever on screen, however long the archive grows.
-   * This counts the interior run only: with a page pinned at each end beside it,
-   * the number of buttons on screen never exceeds seven. The run is bounded so
-   * the control is the same width on a hundred pages as on eight: a page count is
-   * not allowed to become a layout. */
-  const PAGE_WINDOW = 5;
+  /* Paging is navigation of a constant size. However long the archive grows,
+   * the control is the same three steps and one read-only line: the page count
+   * never becomes a row of numbered buttons, a field, or a list, and a page is
+   * stepped to rather than picked from a set of thousands. */
 
-  /* The run of page numbers to show, or null when the whole set already fits.
-   * Five consecutive pages, slid so the current page sits in the middle and so
-   * the run never runs off either end — near the first page it starts at 1, near
-   * the last it ends at the last, and there is never a short gap at an edge. */
-  function pageRun(pages, current) {
-    if (pages <= PAGE_WINDOW) return null;
-    const side = Math.floor(PAGE_WINDOW / 2);
-    const from = Math.min(Math.max(current - side, 1), pages - PAGE_WINDOW + 1);
-    return { from: from, to: from + PAGE_WINDOW - 1 };
-  }
-
-  /* A page number is a button, not an option in a select. A select would put the
-   * whole page count behind one control that has to be opened before any of it is
-   * reachable, and it renders as whatever the platform decides; buttons are the
-   * same control everywhere, are reachable from the keyboard one at a time, and
-   * are what the back button and a copied link come back to. It is returned
-   * wrapped in an li because an ol may only hold li, not bare buttons. */
-  function pageButton(page) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.className = "btn pager__page";
-    button.type = "button";
-    button.dataset.page = String(page);
-    // Spoken as "Page 4" inside a named nav, which a bare "4" is not.
-    button.setAttribute("aria-label", "Page " + page);
-    button.textContent = String(page);
-    item.appendChild(button);
-    return item;
-  }
-
-  /* What stands between two runs of pages. An <li> and not a button: there is
-   * nothing to press, nothing to focus and nothing to disable, and the numbers
-   * either side of it are how the operator crosses it. */
-  function pageGap() {
-    const item = document.createElement("li");
-    item.className = "pager__gap";
-    item.setAttribute("aria-hidden", "true");
-    item.textContent = "…";
-    return item;
-  }
-
-  /* Every one of these controls is dead whenever a read is in flight or a delete
-   * is: a page control that answered while the list behind it was still loading
-   * would be describing a page nobody can see. The marked current page is disabled
-   * too, because asking again for the page already on screen is not a move. */
+  /* Every control is dead while a read the operator asked for is in flight or a
+   * delete is: a step taken against a page nobody can see describes nothing. */
   function renderPager() {
     const busy = state.eventsLoading || state.deleting;
-    const pages = state.pages;
-    const run = pageRun(pages, state.page);
-
-    /* Buttons are rebuilt only when the visible set changes, so a poll landing on
-     * the same page cannot take the focus off the page button an operator is on
-     * with a keyboard. The current page is re-stated below every pass, however it
-     * was arrived at: a click, a deep link, or the back button. */
-    const signature = run === null ? "all:" + pages : run.from + ":" + run.to;
-    if (renderedPages !== signature) {
-      renderedPages = signature;
-      while (el.pageNumbers.firstChild) el.pageNumbers.removeChild(el.pageNumbers.firstChild);
-      if (run === null) {
-        for (let page = 1; page <= pages; page += 1) el.pageNumbers.appendChild(pageButton(page));
-      } else {
-        if (run.from > 1) {
-          el.pageNumbers.appendChild(pageButton(1));
-          el.pageNumbers.appendChild(pageGap());
-        }
-        for (let page = run.from; page <= run.to; page += 1) {
-          el.pageNumbers.appendChild(pageButton(page));
-        }
-        if (run.to < pages) {
-          el.pageNumbers.appendChild(pageGap());
-          el.pageNumbers.appendChild(pageButton(pages));
-        }
-      }
+    // "of N" is only ever printed for a page count that was actually read, so a
+    // deep link onto page 5 of an archive that has not answered yet never reads
+    // as "Page 5 of 1".
+    if (state.eventsRead) {
+      el.pageStatus.textContent = "Page " + state.page + " of " + state.pages;
+    } else if (state.eventsLoading) {
+      el.pageStatus.textContent = "Loading page " + state.page + "…";
+    } else {
+      el.pageStatus.textContent = "Page " + state.page;
     }
-
-    for (const button of el.pageNumbers.querySelectorAll(".pager__page")) {
-      const current = button.dataset.page === String(state.page);
-      if (current) button.setAttribute("aria-current", "page");
-      else button.removeAttribute("aria-current");
-      button.disabled = busy || current;
-    }
-
     el.pagePrev.disabled = busy || state.page <= 1;
-    el.pageNext.disabled = busy || state.page >= pages;
+    el.pageNext.disabled = busy || state.page >= state.pages;
     el.pageLatest.disabled = busy || state.page === 1;
   }
 
@@ -920,7 +1011,7 @@
       const img = node.querySelector(".event__img");
       link.href = href;
       link.setAttribute("aria-label", "Open snapshot from " + label + " at " + at);
-      img.alt = "Person detected by " + label;
+      img.alt = textOr(event.label, "Object") + " detected by " + label;
       img.src = href;
 
       node.querySelector(".event__camera").textContent = label;
@@ -928,7 +1019,9 @@
       node.querySelector(".event__time").textContent = at;
 
       // Two facts, each from the event: whether the 60 s zone is among its zones,
-      // and whether it is being held. Neither is a judgement about a person.
+      // and whether it is being held. Neither is a judgement about a person or an
+      // animal, and the loitering flag stays off an animal row, which is held on
+      // sight and never reaches the 60 s zone.
       const flag = node.querySelector(".event__flag");
       setShown(flag, inLoiterZone(event));
       if (inLoiterZone(event)) flag.textContent = LOITERING_LABEL;
@@ -1037,6 +1130,129 @@
     el.deleteAll.disabled = busy;
   }
 
+  /* ----------------------------------------------------------- snapshots -- */
+
+  /* One dialog views every snapshot, and it is handed the address off the row's
+   * own anchor rather than one built here: a second construction could only ever
+   * be a second answer about which file a row is showing. The href is checked
+   * against this origin and the one path shape before it is read, so a row
+   * cannot aim the viewer at anything this page does not already serve. */
+  function snapshotURL(anchor) {
+    const href = anchor.getAttribute("href");
+    if (!href) return null;
+    let url;
+    try {
+      url = new URL(href, window.location.href);
+    } catch (err) {
+      return null;
+    }
+    if (url.origin !== window.location.origin) return null;
+    if (!SNAPSHOT_PATH.test(url.pathname)) return null;
+    return url.href;
+  }
+
+  // Bumped on every open and on every close, so a decode that lands late paints
+  // nothing over the snapshot that is on screen now.
+  let shotToken = 0;
+  let shotOpener = null;
+
+  function shotReady() {
+    el.shotStage.dataset.state = "ready";
+    el.shotState.textContent = "";
+    setShown(el.shotImage, true);
+  }
+
+  function shotFailed() {
+    el.shotStage.dataset.state = "error";
+    el.shotState.textContent =
+      "That snapshot could not be read. It may already have been deleted, or the camera service is not answering.";
+    setShown(el.shotImage, false);
+  }
+
+  function openSnapshot(anchor) {
+    if (el.shotDialog.open) return false;
+    const src = snapshotURL(anchor);
+    if (!src) return false;
+
+    // The row's own link, not activeElement: a browser that leaves links
+    // unfocused on click would otherwise hand focus back to the document rather
+    // than to the picture the operator just opened.
+    shotOpener = anchor;
+
+    // The caption says the two facts that identify the row, read off that row.
+    const row = anchor.closest(".event");
+    const camera = row ? row.querySelector(".event__camera") : null;
+    const time = row ? row.querySelector(".event__time") : null;
+    const label = camera ? camera.textContent : "Snapshot";
+    const at = time ? time.textContent : "";
+    el.shotCaption.textContent = at ? label + " · " + at : label;
+
+    const token = ++shotToken;
+    el.shotStage.dataset.state = "loading";
+    el.shotState.textContent = "Loading the snapshot…";
+    setShown(el.shotImage, false);
+    // Assigned rather than added, so opening a second snapshot cannot leave a
+    // listener behind that fires against the one after it.
+    el.shotImage.onload = () => {
+      if (token === shotToken) shotReady();
+    };
+    el.shotImage.onerror = () => {
+      if (token === shotToken) shotFailed();
+    };
+    // The row's own thumbnail alt, which was built from this event's detected
+    // label. A word typed in here would say "Person" over a dog, and the dialog is
+    // the same picture at a larger size: the alt has to be the row's, not a second
+    // answer about it. Nothing is claimed here when the row carried no alt.
+    const thumb = row ? row.querySelector(".event__img") : null;
+    el.shotImage.alt = thumb ? textOr(thumb.getAttribute("alt"), "") : "";
+    el.shotImage.src = src;
+
+    el.shotDialog.showModal();
+    lockScroll();
+    el.shotClose.focus();
+    // A picture already in the browser's cache can be complete before the load
+    // event is ever queued, and one that never arrives would leave the loading
+    // line up over a picture that is there.
+    if (el.shotImage.complete && el.shotImage.naturalWidth > 0) shotReady();
+    return true;
+  }
+
+  /* An ordinary click reads the picture here. A modified or middle click is left
+   * alone, so the anchor is still a link: the file itself opens in a tab exactly
+   * as it did, and the dialog is only ever a viewer, never a gate. */
+  function onRowShot(event) {
+    if (event.defaultPrevented || event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const anchor = event.target.closest(".event__shot");
+    if (!anchor || !el.events.contains(anchor)) return;
+    if (openSnapshot(anchor)) event.preventDefault();
+  }
+
+  el.events.addEventListener("click", onRowShot);
+
+  el.shotClose.addEventListener("click", () => {
+    el.shotDialog.close();
+  });
+
+  // Escape is the browser's own. The backdrop, and the dialog's own padding,
+  // are the dialog element: there is nothing behind a modal one to hit.
+  el.shotDialog.addEventListener("click", (event) => {
+    if (event.target === el.shotDialog) el.shotDialog.close();
+  });
+
+  el.shotDialog.addEventListener("close", () => {
+    ++shotToken;
+    el.shotImage.onload = null;
+    el.shotImage.onerror = null;
+    el.shotImage.removeAttribute("src");
+    releaseScroll();
+    const opener = shotOpener;
+    shotOpener = null;
+    // The archive is rebuilt under the operator's hands, so a row anchor that
+    // has since gone is passed over rather than resurrected.
+    if (opener && opener.isConnected) opener.focus();
+  });
+
   /* ------------------------------------------------------- confirmation -- */
 
   /* What the confirmation will send, captured when it opens. A poll, a filter
@@ -1079,6 +1295,7 @@
     // must not arrive with its way out still switched off.
     el.confirmCancel.disabled = false;
     el.dialog.showModal();
+    lockScroll();
     // Cancel is the default focus. An irreversible action never opens with the
     // destructive button already under the operator's thumb.
     el.confirmCancel.focus();
@@ -1096,9 +1313,8 @@
     }, 0);
     return (
       plural(ids.length, "selected snapshot") +
-      " will be deleted" +
       (kept > 0 ? ", including " + kept + " kept for review" : "") +
-      ", and nothing else. Detections that arrive while this is open are not affected."
+      ". Nothing else is deleted."
     );
   }
 
@@ -1109,8 +1325,7 @@
     return (
       "All " +
       plural(summary.count, "saved snapshot") +
-      " on all four cameras will be deleted, including every one held for review, " +
-      "on every page of the archive and not only the pages shown above."
+      " on all four cameras, including those kept for review, on every page."
     );
   }
 
@@ -1527,9 +1742,9 @@
    * afterwards. It also means only the newest read owns the loading and error
    * state, so a superseded one cannot clear a list that is still correct.
    *
-   * transition is a move to a different page or camera, not a re-read of the page
-   * already on screen: the old rows leave immediately, because leaving them under
-   * a new page number is the one thing this must never do.
+   * A transition is a move to a different page or camera, not a re-read of the
+   * page already on screen: the old rows leave immediately, because leaving them
+   * under a new page number is the one thing this must never do.
    *
    * Reports whether the list it left behind is a list that was actually read, so
    * a caller can say so rather than assume it. A failed read is never presented as
@@ -1818,14 +2033,14 @@
     else window.history.replaceState(null, "", entry);
   }
 
-  /* The pressed state of the filter chips follows state.filter instead of being
+  /* The pressed state of the camera tabs follows state.filter instead of being
    * written at the click, so a view restored from a link or from the back button
-   * shows the filter it is rather than leaving the old chip lit. */
+   * shows the filter it is rather than leaving the old tab lit. */
   function markFilter(camera) {
-    for (const chip of el.filters.querySelectorAll("button[data-camera]")) {
-      const on = chip.dataset.camera === camera;
-      chip.classList.toggle("is-on", on);
-      chip.setAttribute("aria-pressed", on ? "true" : "false");
+    for (const tab of el.filters.querySelectorAll("button[data-camera]")) {
+      const on = tab.dataset.camera === camera;
+      tab.classList.toggle("is-on", on);
+      tab.setAttribute("aria-pressed", on ? "true" : "false");
     }
   }
 
@@ -1861,21 +2076,15 @@
     readEvents(true);
   });
 
+  /* Three steps, each a move to a page that exists. goToPage() refuses the move
+   * that changes nothing and clamps to the page count, so no step can name a
+   * page the archive does not have. */
   el.pagePrev.addEventListener("click", () => {
     goToPage(state.page - 1);
   });
 
   el.pageNext.addEventListener("click", () => {
     goToPage(state.page + 1);
-  });
-
-  /* One delegated handler on the run itself, because the run is rebuilt whenever
-   * the visible set changes and a per-button listener would have to be re-attached
-   * every time. The same reason the row boxes are delegated. */
-  el.pageNumbers.addEventListener("click", (event) => {
-    const button = event.target.closest("button[data-page]");
-    if (!button || button.disabled) return;
-    goToPage(Number(button.dataset.page));
   });
 
   // The newest page, asked for rather than waited for.
@@ -1930,6 +2139,12 @@
       return;
     }
     intent = null;
+  });
+
+  // Every way out of the confirmation reaches this: the cancel button, Escape,
+  // or the delete's own close() once the answer has landed.
+  el.dialog.addEventListener("close", () => {
+    releaseScroll();
   });
 
   document.addEventListener("visibilitychange", () => {

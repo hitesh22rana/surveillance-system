@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
-    <title>Surveillance Console — camera overview and snapshot review</title>
+    <title>Surveillance console — camera overview and snapshot review</title>
     <meta
       name="description"
       content="Local camera overview: live main-stream video for four cameras, paged through saved person detections, and manual review of saved snapshots."
@@ -15,10 +15,10 @@
     <link rel="stylesheet" href="/style.css" />
   </head>
   <body>
-    <header class="bar">
-      <div class="bar__inner">
-        <p class="wordmark">Surveillance Console</p>
-        <p class="bar__state" id="backend-state" role="status">
+    <header class="topbar">
+      <div class="topbar__inner">
+        <h1 class="topbar__name">Surveillance console</h1>
+        <p class="topbar__state" id="backend-state" role="status">
           <span class="tick" data-tone="pending" aria-hidden="true"></span>
           <span id="backend-state-text">Connecting to cameras</span>
         </p>
@@ -35,98 +35,248 @@
 
       <section class="section" aria-labelledby="feeds-heading">
         <div class="section__head">
-          <p class="eyebrow">Live · 2560×1440 · 25 fps source</p>
-          <h1 class="section__title" id="feeds-heading">Camera overview</h1>
-          <p class="section__lede">
-            Full-resolution live video. Detection runs separately at about 3 FPS.
-          </p>
+          <div>
+            <h2 class="section__title" id="feeds-heading">Camera overview</h2>
+            <p class="section__lede">
+              Each camera's own 2560&times;1440 main stream, at its source rate.
+              Detection runs separately, at about 3&nbsp;FPS.
+            </p>
+          </div>
         </div>
 
+        <!-- Each card is one always-open, non-modal <dialog> styled to sit inline
+             in the grid. Expanding closes and reopens that same element as modal,
+             so the frame, the <video> and the go2rtc player are never moved,
+             cloned or reconnected. -->
         <ul class="feeds" id="feeds">
           <li class="feed" data-camera="camera_1">
-            <div class="feed__frame" data-video="off">
-              <p class="feed__placeholder">Loading the live player</p>
-            </div>
-            <div class="feed__meta">
-              <h2 class="feed__name">Camera 1</h2>
-              <p class="readout feed__status feed__live">
-                <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__live-text">live &middot; starting</span>
-              </p>
-              <p class="readout feed__status feed__detect">
-                <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__detect-text">detector &middot; no data</span>
-              </p>
-              <p class="readout feed__stamp">&mdash;</p>
-            </div>
+            <dialog
+              class="feed__panel"
+              id="feed-camera_1"
+              role="group"
+              aria-labelledby="feed-name-camera_1"
+              open
+            >
+              <div class="feed__frame" data-video="off">
+                <p class="feed__placeholder">Loading the live player</p>
+              </div>
+              <div class="feed__labels">
+                <div class="feed__head">
+                  <h3 class="feed__name" id="feed-name-camera_1">Camera 1</h3>
+                  <div class="feed__actions">
+                    <button
+                      class="btn btn--icon"
+                      type="button"
+                      data-feed="expand"
+                      data-camera="camera_1"
+                      aria-label="Expand Camera 1"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4.5 9.5V6A1.5 1.5 0 0 1 6 4.5h3.5M14 4.5h3.5A1.5 1.5 0 0 1 19 6v3.5M19 14v3.5a1.5 1.5 0 0 1-1.5 1.5H14M10 19H6.5A1.5 1.5 0 0 1 5 17.5V14" />
+                      </svg>
+                    </button>
+                    <button
+                      class="btn btn--icon"
+                      type="button"
+                      data-feed="close"
+                      data-camera="camera_1"
+                      aria-label="Minimize Camera 1"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <p class="feed__line">
+                  <span class="feed__status feed__live">
+                    <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                    <span class="feed__live-text">live &middot; starting</span>
+                  </span>
+                  <span class="feed__status feed__detect">
+                    <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                    <span class="feed__detect-text">detector &middot; no data</span>
+                  </span>
+                  <span class="feed__stamp">&mdash;</span>
+                </p>
+              </div>
+            </dialog>
           </li>
           <li class="feed" data-camera="camera_2">
-            <div class="feed__frame" data-video="off">
-              <p class="feed__placeholder">Loading the live player</p>
-            </div>
-            <div class="feed__meta">
-              <h2 class="feed__name">Camera 2</h2>
-              <p class="readout feed__status feed__live">
-                <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__live-text">live &middot; starting</span>
-              </p>
-              <p class="readout feed__status feed__detect">
-                <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__detect-text">detector &middot; no data</span>
-              </p>
-              <p class="readout feed__stamp">&mdash;</p>
-            </div>
+            <dialog
+              class="feed__panel"
+              id="feed-camera_2"
+              role="group"
+              aria-labelledby="feed-name-camera_2"
+              open
+            >
+              <div class="feed__frame" data-video="off">
+                <p class="feed__placeholder">Loading the live player</p>
+              </div>
+              <div class="feed__labels">
+                <div class="feed__head">
+                  <h3 class="feed__name" id="feed-name-camera_2">Camera 2</h3>
+                  <div class="feed__actions">
+                    <button
+                      class="btn btn--icon"
+                      type="button"
+                      data-feed="expand"
+                      data-camera="camera_2"
+                      aria-label="Expand Camera 2"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4.5 9.5V6A1.5 1.5 0 0 1 6 4.5h3.5M14 4.5h3.5A1.5 1.5 0 0 1 19 6v3.5M19 14v3.5a1.5 1.5 0 0 1-1.5 1.5H14M10 19H6.5A1.5 1.5 0 0 1 5 17.5V14" />
+                      </svg>
+                    </button>
+                    <button
+                      class="btn btn--icon"
+                      type="button"
+                      data-feed="close"
+                      data-camera="camera_2"
+                      aria-label="Minimize Camera 2"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <p class="feed__line">
+                  <span class="feed__status feed__live">
+                    <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                    <span class="feed__live-text">live &middot; starting</span>
+                  </span>
+                  <span class="feed__status feed__detect">
+                    <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                    <span class="feed__detect-text">detector &middot; no data</span>
+                  </span>
+                  <span class="feed__stamp">&mdash;</span>
+                </p>
+              </div>
+            </dialog>
           </li>
           <li class="feed" data-camera="camera_3">
-            <div class="feed__frame" data-video="off">
-              <p class="feed__placeholder">Loading the live player</p>
-            </div>
-            <div class="feed__meta">
-              <h2 class="feed__name">Camera 3</h2>
-              <p class="readout feed__status feed__live">
-                <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__live-text">live &middot; starting</span>
-              </p>
-              <p class="readout feed__status feed__detect">
-                <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__detect-text">detector &middot; no data</span>
-              </p>
-              <p class="readout feed__stamp">&mdash;</p>
-            </div>
+            <dialog
+              class="feed__panel"
+              id="feed-camera_3"
+              role="group"
+              aria-labelledby="feed-name-camera_3"
+              open
+            >
+              <div class="feed__frame" data-video="off">
+                <p class="feed__placeholder">Loading the live player</p>
+              </div>
+              <div class="feed__labels">
+                <div class="feed__head">
+                  <h3 class="feed__name" id="feed-name-camera_3">Camera 3</h3>
+                  <div class="feed__actions">
+                    <button
+                      class="btn btn--icon"
+                      type="button"
+                      data-feed="expand"
+                      data-camera="camera_3"
+                      aria-label="Expand Camera 3"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4.5 9.5V6A1.5 1.5 0 0 1 6 4.5h3.5M14 4.5h3.5A1.5 1.5 0 0 1 19 6v3.5M19 14v3.5a1.5 1.5 0 0 1-1.5 1.5H14M10 19H6.5A1.5 1.5 0 0 1 5 17.5V14" />
+                      </svg>
+                    </button>
+                    <button
+                      class="btn btn--icon"
+                      type="button"
+                      data-feed="close"
+                      data-camera="camera_3"
+                      aria-label="Minimize Camera 3"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <p class="feed__line">
+                  <span class="feed__status feed__live">
+                    <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                    <span class="feed__live-text">live &middot; starting</span>
+                  </span>
+                  <span class="feed__status feed__detect">
+                    <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                    <span class="feed__detect-text">detector &middot; no data</span>
+                  </span>
+                  <span class="feed__stamp">&mdash;</span>
+                </p>
+              </div>
+            </dialog>
           </li>
           <li class="feed" data-camera="camera_4">
-            <div class="feed__frame" data-video="off">
-              <p class="feed__placeholder">Loading the live player</p>
-            </div>
-            <div class="feed__meta">
-              <h2 class="feed__name">Camera 4</h2>
-              <p class="readout feed__status feed__live">
-                <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__live-text">live &middot; starting</span>
-              </p>
-              <p class="readout feed__status feed__detect">
-                <span class="tick" data-tone="pending" aria-hidden="true"></span>
-                <span class="feed__detect-text">detector &middot; no data</span>
-              </p>
-              <p class="readout feed__stamp">&mdash;</p>
-            </div>
+            <dialog
+              class="feed__panel"
+              id="feed-camera_4"
+              role="group"
+              aria-labelledby="feed-name-camera_4"
+              open
+            >
+              <div class="feed__frame" data-video="off">
+                <p class="feed__placeholder">Loading the live player</p>
+              </div>
+              <div class="feed__labels">
+                <div class="feed__head">
+                  <h3 class="feed__name" id="feed-name-camera_4">Camera 4</h3>
+                  <div class="feed__actions">
+                    <button
+                      class="btn btn--icon"
+                      type="button"
+                      data-feed="expand"
+                      data-camera="camera_4"
+                      aria-label="Expand Camera 4"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4.5 9.5V6A1.5 1.5 0 0 1 6 4.5h3.5M14 4.5h3.5A1.5 1.5 0 0 1 19 6v3.5M19 14v3.5a1.5 1.5 0 0 1-1.5 1.5H14M10 19H6.5A1.5 1.5 0 0 1 5 17.5V14" />
+                      </svg>
+                    </button>
+                    <button
+                      class="btn btn--icon"
+                      type="button"
+                      data-feed="close"
+                      data-camera="camera_4"
+                      aria-label="Minimize Camera 4"
+                    >
+                      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+                        <path d="M6 6l12 12M18 6L6 18" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                <p class="feed__line">
+                  <span class="feed__status feed__live">
+                    <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                    <span class="feed__live-text">live &middot; starting</span>
+                  </span>
+                  <span class="feed__status feed__detect">
+                    <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                    <span class="feed__detect-text">detector &middot; no data</span>
+                  </span>
+                  <span class="feed__stamp">&mdash;</span>
+                </p>
+              </div>
+            </dialog>
           </li>
         </ul>
 
-        <dl class="readout-strip" id="readout-strip">
-          <div class="readout-strip__item">
+        <dl class="stats" id="readout-strip">
+          <div class="stats__item">
             <dt>Live views</dt>
             <dd id="stat-live">&mdash;</dd>
           </div>
-          <div class="readout-strip__item">
+          <div class="stats__item">
             <dt>Detector rate &middot; fps</dt>
             <dd id="stat-detect-rate">&mdash;</dd>
           </div>
-          <div class="readout-strip__item">
-            <dt>Detector speed</dt>
+          <div class="stats__item">
+            <dt>Inference</dt>
             <dd id="stat-inference">&mdash;</dd>
           </div>
-          <div class="readout-strip__item">
+          <div class="stats__item">
             <dt>Status age</dt>
             <dd id="stat-age">&mdash;</dd>
           </div>
@@ -135,62 +285,64 @@
 
       <section class="section" aria-labelledby="events-heading">
         <div class="section__head">
-          <h2 class="section__title" id="events-heading">Saved detections</h2>
-          <p class="section__lede">
-            An ordinary detection in a monitored area expires after 6 h. One tracked for
-            60 seconds in an area is held until you delete it.
-          </p>
+          <div>
+            <h2 class="section__title" id="events-heading">Saved detections</h2>
+            <p class="section__lede">
+              An ordinary detection in a monitored area expires after 6&nbsp;h. One tracked
+              for 60&nbsp;seconds in an area is held until you delete it.
+            </p>
+          </div>
+          <p class="tally" id="events-tally">Waiting for detection data.</p>
         </div>
 
+        <details class="legend">
+          <summary>How the row labels are worked out</summary>
+          <p>
+            <strong>6-hour retention</strong> expires on its own.
+            <strong>Loitering &ge;60&nbsp;s</strong> is the camera service counting how long
+            it tracked one person inside a monitored area.
+            <strong>Kept for review</strong> is held until you delete it. A person gets
+            here by loitering; an animal gets here on sight, on the first three cameras.
+            <strong>Previously kept</strong> was held from before the 60&nbsp;second rule
+            existed. In this prototype a monitored area is the whole camera frame.
+          </p>
+        </details>
+
         <div class="filters" id="filters" role="group" aria-label="Filter detections by camera">
-          <button class="chip is-on" type="button" data-camera="all" aria-pressed="true">
+          <button class="tab is-on" type="button" data-camera="all" aria-pressed="true">
             All cameras
           </button>
-          <button class="chip" type="button" data-camera="camera_1" aria-pressed="false">
+          <button class="tab" type="button" data-camera="camera_1" aria-pressed="false">
             Camera 1
           </button>
-          <button class="chip" type="button" data-camera="camera_2" aria-pressed="false">
+          <button class="tab" type="button" data-camera="camera_2" aria-pressed="false">
             Camera 2
           </button>
-          <button class="chip" type="button" data-camera="camera_3" aria-pressed="false">
+          <button class="tab" type="button" data-camera="camera_3" aria-pressed="false">
             Camera 3
           </button>
-          <button class="chip" type="button" data-camera="camera_4" aria-pressed="false">
+          <button class="tab" type="button" data-camera="camera_4" aria-pressed="false">
             Camera 4
           </button>
         </div>
 
         <div class="review">
-          <p class="readout events__tally" id="events-tally">Waiting for detection data.</p>
-
-          <details class="readout events__rules">
-            <summary>How these badges and the 60 seconds are worked out</summary>
-            <p>
-              <strong>6-hour retention</strong> expires on its own ·
-              <strong>Loitering ≥60 s</strong> is the camera service&rsquo;s own tally of
-              frames it tracked inside a monitored area, so it is not a claim that anyone
-              stood still · <strong>Kept for review</strong> is held until you delete it ·
-              <strong>Previously kept</strong> is held from before the 60 s rule existed. In
-              this prototype the monitored area is the full camera frame.
-            </p>
-          </details>
-
-          <div class="review__bar">
+          <div class="toolbar">
             <label class="check">
               <input class="check__input" type="checkbox" id="select-shown" disabled />
               <span class="check__label">Select all shown</span>
             </label>
-            <button class="btn" type="button" id="clear-selection" disabled>
+            <button class="btn btn--quiet" type="button" id="clear-selection" disabled>
               Clear selection
             </button>
-            <p class="readout review__count" id="selection-count">0 selected</p>
-            <button class="btn" type="button" id="delete-selected" disabled>
+            <p class="toolbar__count" id="selection-count">0 selected</p>
+            <button class="btn btn--danger" type="button" id="delete-selected" disabled>
               Delete selected
             </button>
           </div>
 
           <p
-            class="readout review__result"
+            class="result"
             id="delete-result"
             data-tone="pending"
             role="status"
@@ -198,10 +350,27 @@
           ></p>
 
           <nav class="pager" aria-label="Saved detections pages">
-            <button class="btn" type="button" id="page-prev" disabled>Previous</button>
-            <ol class="pager__pages" id="page-numbers"></ol>
-            <button class="btn" type="button" id="page-next" disabled>Next</button>
-            <button class="btn btn--quiet" type="button" id="page-latest" disabled>
+            <button class="btn" type="button" id="page-prev" disabled>
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M14.5 5.5 8 12l6.5 6.5" />
+              </svg>
+              Previous
+            </button>
+
+            <p class="pager__status" id="page-status" role="status">Page 1 of 1</p>
+
+            <button class="btn" type="button" id="page-next" disabled>
+              Next
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M9.5 5.5 16 12l-6.5 6.5" />
+              </svg>
+            </button>
+
+            <button class="btn" type="button" id="page-latest" disabled>
+              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M17 6l-7 6 7 6V6Z" />
+                <path d="M6.5 6v12" />
+              </svg>
               Latest
             </button>
           </nav>
@@ -212,13 +381,11 @@
         <p class="events__empty" id="events-empty" hidden>No saved detections yet</p>
 
         <section class="archive" aria-labelledby="archive-heading">
-          <div class="section__head">
+          <div class="archive__text">
             <h3 class="archive__title" id="archive-heading">Saved snapshot archive</h3>
-            <p class="section__lede">
-              A separate action from ticking rows above: it covers every saved
-              snapshot on all four cameras, on every page of the archive and
-              including the ones held for review. It is never triggered by a
-              selection.
+            <p class="archive__note">
+              Deletes every saved snapshot on all four cameras, on every page, including
+              the ones held for review. Separate from the rows ticked above.
             </p>
           </div>
           <button class="btn btn--danger" type="button" id="delete-all">
@@ -227,6 +394,29 @@
         </section>
       </section>
     </main>
+
+    <!-- One reusable viewer for every snapshot: the row's own href is read from
+         the anchor, never rebuilt here, and only after it is checked to be a
+         same-origin path of the shape the proxy already serves. -->
+    <dialog class="lightbox" id="snapshot-dialog" aria-labelledby="snapshot-caption">
+      <div class="lightbox__bar">
+        <p class="lightbox__caption" id="snapshot-caption"></p>
+        <button
+          class="btn btn--icon"
+          type="button"
+          id="snapshot-close"
+          aria-label="Close snapshot"
+        >
+          <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+      </div>
+      <div class="lightbox__stage" id="snapshot-stage" data-state="loading">
+        <img class="lightbox__img" id="snapshot-image" alt="" decoding="async" />
+        <p class="lightbox__state" id="snapshot-state" role="status"></p>
+      </div>
+    </dialog>
 
     <dialog
       class="confirm"
@@ -238,8 +428,7 @@
         <h2 class="confirm__title" id="delete-dialog-title">Delete snapshots?</h2>
         <p class="confirm__scope" id="delete-dialog-scope"></p>
         <p class="confirm__note" id="delete-dialog-note">
-          Deleting is immediate and cannot be undone. Nothing is sent until you
-          confirm, and a request that fails is never sent again.
+          Immediate, and it cannot be undone.
         </p>
         <div class="confirm__actions">
           <button class="btn" type="submit" id="delete-cancel" autofocus>Cancel</button>
@@ -259,13 +448,15 @@
           <img class="event__img" alt="" loading="lazy" />
         </a>
         <div class="event__body">
-          <p class="event__head">
+          <p class="event__line">
             <span class="event__camera"></span>
             <span class="event__zone"></span>
-            <span class="event__flag" hidden>Loitering ≥60 s</span>
-            <span class="event__kept">6-hour retention</span>
+            <span class="event__time"></span>
           </p>
-          <p class="readout event__time"></p>
+          <p class="event__tags">
+            <span class="event__flag event__tag" hidden>Loitering &ge;60&nbsp;s</span>
+            <span class="event__kept event__tag">6-hour retention</span>
+          </p>
         </div>
       </li>
     </template>

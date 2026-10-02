@@ -1,100 +1,94 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: Cobalt (dark adaptation)
- * tone: operational console · anchor hue: 256 (one restrained cool-blue signal on cool neutrals)
- * nav: N9 edge-aligned minimal · footer: Ft2 inline rule single line
- * enrichment: none — the live preview frames are the imagery, nothing is decorated
- * pre-emit critique: P4 H5 E4 S5 R5 V5
- * contrast: pairs designed to WCAG 2.1 minimums — pending browser verification (docs/validation.md)
- * mobile: 320 / 375 / 414 / 768 — no horizontal scroll, single-line affordances
+/* Surveillance console — design tokens.
  *
- * Design tokens only. The dashboard stylesheet consumes these by name.
- *
- * Type: native system sans, because the appliance must render with no network
- * fetch; native mono for machine readouts. Two families, both local.
+ * One neutral charcoal family for every surface, one restrained blue for
+ * interaction, and three status colours that are only ever shown beside a word.
+ * Type is the system sans everywhere; the native mono is reserved for values
+ * that are genuinely numbers, so a rate, a count or a page number lines up in a
+ * column and prose does not.
  */
 
 :root {
-  /* ---- Surfaces: cool neutrals tinted toward hue 256, never zero chroma ---- */
-  --color-paper: oklch(16% 0.008 256); /* app background */
-  --color-paper-2: oklch(19.5% 0.009 256); /* card surface */
-  --color-paper-3: oklch(23% 0.01 256); /* reserved frame, chip fill */
-  --color-paper-4: oklch(28% 0.011 256); /* hover on reserved frame */
-  --color-graphite: oklch(13% 0.007 256); /* deepest band */
+  /* ---- Surfaces: cool charcoal, tinted toward 258 so nothing is dead grey -- */
+  --bg: oklch(17% 0.005 258); /* page */
+  --surface: oklch(20.5% 0.006 258); /* a raised surface */
+  --surface-2: oklch(24.5% 0.007 258); /* control fill */
+  --surface-3: oklch(28.5% 0.008 258); /* control hover */
+  --well: oklch(12.5% 0.005 258); /* video off, empty picture */
 
-  /* ---- Rules: hairlines are the depth model. rule-2 is a component boundary. ---- */
-  --color-rule: oklch(30% 0.012 256); /* internal hairline */
-  --color-rule-2: oklch(50% 0.018 256); /* card / control boundary, >=3:1 on paper */
-  --color-rule-3: oklch(62% 0.02 256); /* hover / active boundary */
+  /* ---- Hairlines are the depth model, and they are quiet ---- */
+  --rule: oklch(26.5% 0.007 258); /* between rows and groups */
+  --rule-2: oklch(33.5% 0.009 258); /* control boundary */
+  --rule-3: oklch(43% 0.011 258); /* control hover boundary */
 
   /* ---- Ink ---- */
-  --color-ink: oklch(96% 0.004 256); /* primary text */
-  --color-ink-2: oklch(86% 0.008 256); /* body copy */
-  --color-muted: oklch(72% 0.011 256); /* meta, helper, placeholders */
-  --color-faint: oklch(58% 0.011 256); /* de-emphasised / disabled */
+  --ink: oklch(95% 0.003 258); /* headings, camera names */
+  --ink-2: oklch(84% 0.006 258); /* body */
+  --muted: oklch(70% 0.008 258); /* metadata, helper text */
+  --faint: oklch(55% 0.008 258); /* disabled, least important */
 
-  /* ---- One signal accent. Text-on-dark use only; it never fills a field. ---- */
-  --color-accent: oklch(66% 0.13 250); /* accent text, links, ticks (5.8:1 on paper) */
-  --color-accent-quiet: oklch(66% 0.13 250 / 0.14);
-  --color-accent-line: oklch(66% 0.13 250 / 0.5);
-  /* A darker step exists solely so filled controls can carry text at 4.5:1. */
-  --color-accent-fill: oklch(52% 0.16 250);
-  --color-accent-fill-ink: oklch(98% 0.008 250);
-  --color-focus: oklch(84% 0.11 242); /* ring: >=3:1 on paper, paper-3 and accent-fill */
+  /* ---- One accent. Interaction, selection, focus. Never decoration. ---- */
+  --accent: oklch(72% 0.1 248);
+  --accent-quiet: oklch(72% 0.1 248 / 0.13);
+  /* A darker step exists only so a filled control can carry text at 4.5:1. */
+  --accent-fill: oklch(48% 0.13 248);
+  --accent-fill-ink: oklch(98% 0.004 248);
+  --focus: oklch(82% 0.09 240);
 
-  /* ---- Status: always paired with a word, never colour alone ---- */
-  --color-ok: oklch(74% 0.12 158);
-  --color-stale: oklch(82% 0.12 84);
-  --color-bad: oklch(72% 0.15 24);
+  /* ---- Status. Always paired with a word, never colour on its own. ---- */
+  --tone-ok: oklch(74% 0.11 160);
+  --tone-warn: oklch(80% 0.11 82);
+  --tone-bad: oklch(70% 0.14 26);
 
   /* ---- Type ---- */
-  --font-body: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
     Arial, sans-serif;
-  --font-readout: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+  --font-num: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
 
-  --text-xs: 0.6875rem; /* 11px — readouts only, never body copy */
-  --text-sm: 0.8125rem; /* 13px — meta */
+  --text-xs: 0.75rem; /* 12px — metadata */
+  --text-sm: 0.8125rem; /* 13px — secondary metadata */
+  --text-control: 0.875rem; /* 14px — every control label */
   --text-base: 1rem; /* 16px — body floor */
-  --text-md: 1.125rem;
-  --text-lg: 1.375rem;
-  --text-xl: 1.75rem;
+  --text-md: 1.0625rem;
+  --text-lg: 1.25rem;
 
-  --lh-tight: 1.15;
-  --lh-snug: 1.35;
+  --lh-tight: 1.2;
   --lh-body: 1.55;
-  --tracking-tight: -0.02em;
-  --tracking-readout: 0.08em;
 
-  /* ---- Space: 4pt scale ---- */
-  --space-3xs: 0.125rem;
-  --space-2xs: 0.25rem;
-  --space-xs: 0.5rem;
-  --space-sm: 0.75rem;
-  --space-md: 1rem;
-  --space-lg: 1.5rem;
+  /* ---- Space: 4pt scale. Section rhythm is --space-lg, card padding --space-md. */
+  --space-3xs: 0.25rem;
+  --space-2xs: 0.5rem;
+  --space-xs: 0.75rem;
+  --space-sm: 1rem;
+  --space-md: 1.5rem;
+  --space-lg: 1.75rem;
   --space-xl: 2.5rem;
-  --space-2xl: 4rem;
 
-  /* ---- Radii: drawn with a ruler ---- */
+  /* ---- Radii: controls 6px, frames and surfaces 8px ---- */
   --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 10px;
+  --radius: 6px;
+  --radius-lg: 8px;
   --radius-pill: 999px;
 
-  /* ---- Feed geometry: reserved, so nothing shifts when a frame lands ---- */
-  --ratio-feed: 352 / 288;
+  /* ---- Workspace: one centred, fluid measure ---- */
+  --workspace: 90rem; /* 1440px */
 
-  /* ---- Motion: press feedback only ---- */
+  /* ---- Controls: 40px on a pointer, 44px on a finger ---- */
+  --control-h: 44px;
+  --control-size: var(--text-control);
+
+  /* ---- Motion: press feedback and colour only. Nothing enters or moves. ---- */
   --dur-micro: 120ms;
-  --dur-short: 200ms;
+  --dur-hold: 90ms; /* a pointer crossing a control does not change it yet */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
 
-  /* ---- Layer scale ---- */
-  --z-base: 1;
+  /* ---- Layers ---- */
   --z-raised: 10;
   --z-sticky: 200;
-  --z-modal: 400;
+}
 
-  /* ---- Hit target floor ---- */
-  --tap-min: 44px;
+@media (min-width: 48rem) {
+  :root {
+    --control-h: 40px;
+  }
 }

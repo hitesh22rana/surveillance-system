@@ -1,18 +1,12 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: Cobalt (dark adaptation)
- * tone: operational console · anchor hue: 256 · nav: N9
- * pre-emit critique: P4 H5 E4 S5 R5 V5
- * contrast: designed to WCAG 2.1 minimums, pending browser verification · mobile: 320/375/414/768
+/* Surveillance console — a dark monitoring workspace.
  *
- * Workbench adaptation: the canonical Workbench page is a guided tour with
- * sticky bottom CTA and reveal choreography. A monitoring console has no tour,
- * so the CTA and reveals are cut and the shape is kept — small functional
- * heading, framed captures as the content, the frame as the divider. Knobs:
- * F3 tabular spec sheet (3 columns, hairline rules, tabular numerics) for the
- * readout strip; readout chips instead of a hero stat. Motion is press feedback
- * only.
+ * Section rhythm is one value, card padding is one value, and the only boxes on
+ * the page are the ones that hold a control or a picture. Motion is press
+ * feedback and colour on hover: this is read hundreds of times a day, so nothing
+ * here enters, moves or reveals itself.
  */
 
-/* ---------------------------------------------------------------- base --- */
+/* ------------------------------------------------------------------ base --- */
 
 *,
 *::before,
@@ -24,8 +18,8 @@ html {
   overflow-x: clip;
 }
 
-/* One rule for every element: several components below set display, and an
- * author declaration beats the user-agent rule behind the hidden attribute. */
+/* One rule for every element: an author display would otherwise beat the
+ * user-agent rule behind the hidden attribute. */
 [hidden] {
   display: none !important;
 }
@@ -33,11 +27,10 @@ html {
 body {
   overflow-x: clip;
   margin: 0;
-  background: var(--color-paper);
-  color: var(--color-ink-2);
-  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--ink-2);
+  font-family: var(--font-sans);
   font-size: var(--text-base);
-  font-weight: 400;
   line-height: var(--lh-body);
   -webkit-text-size-adjust: 100%;
 }
@@ -50,255 +43,186 @@ dl,
 dd,
 dt,
 ul,
-li,
-figure {
+ol,
+li {
   margin: 0;
   padding: 0;
 }
 
-ul {
+ul,
+ol {
   list-style: none;
 }
 
 h1,
-h2 {
-  color: var(--color-ink);
+h2,
+h3 {
+  color: var(--ink);
   font-weight: 600;
-  font-style: normal;
   line-height: var(--lh-tight);
-  letter-spacing: var(--tracking-tight);
+  letter-spacing: -0.015em;
   min-width: 0;
-  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 a {
-  color: var(--color-accent);
-  text-decoration-color: var(--color-accent-line);
+  color: var(--accent);
   text-underline-offset: 2px;
 }
 
-/* The ring is drawn, not animated, and it takes the shape of whatever is
- * focused: forcing one radius on every control made chips, buttons and cards
- * share a ring they do not own. */
+/* Drawn, not animated, and it takes the shape of whatever is focused. */
 :focus-visible {
-  outline: 2px solid var(--color-focus);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
 ::selection {
-  background: var(--color-accent-quiet);
-  color: var(--color-ink);
+  background: var(--accent-quiet);
+  color: var(--ink);
 }
 
-/* One place where a visible native scrollbar is a usability win: the event
-   list can outgrow the viewport on a small screen. */
-.events {
-  overflow-y: auto;
-  max-height: 34rem;
-  scrollbar-color: var(--color-rule-3) var(--color-paper-2);
-}
+/* ---------------------------------------------------------------- layout --- */
 
-/* ------------------------------------------------------- top bar (N9) --- */
-
-.bar {
-  position: sticky;
-  top: 0;
-  z-index: var(--z-sticky);
-  background: var(--color-paper);
-  border-bottom: 1px solid var(--color-rule);
-}
-
-.bar__inner {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-xs) var(--space-lg);
-  padding: var(--space-sm) clamp(1rem, 4vw, 2.5rem);
-  padding-inline: max(clamp(1rem, 4vw, 2.5rem), env(safe-area-inset-left));
-}
-
-.wordmark {
-  margin-inline-end: auto;
-  color: var(--color-ink);
-  font-family: var(--font-readout);
-  font-size: var(--text-sm);
-  letter-spacing: var(--tracking-readout);
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.bar__state,
-.feed__status {
-  display: flex;
-  align-items: center;
-  gap: var(--space-xs);
-  white-space: nowrap;
-}
-
-/* ------------------------------------------------------------ layout ----- */
-
+/* One centred measure for the whole workspace, and one gap between sections. */
 #main {
-  padding: var(--space-lg) clamp(1rem, 4vw, 2.5rem);
-  padding-inline: max(clamp(1rem, 4vw, 2.5rem), env(safe-area-inset-left));
-  padding-bottom: max(var(--space-lg), env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
   gap: var(--space-xl);
+  width: min(100% - 2rem, var(--workspace));
+  margin-inline: auto;
+  padding-block: var(--space-lg) var(--space-xl);
 }
 
-/* One rhythm inside a section. Dense enough that a poll landing in a fifty-row
- * list is not a scroll away from the controls that act on it. */
 .section {
   display: flex;
   flex-direction: column;
   gap: var(--space-md);
-  max-width: 78rem;
+  min-width: 0;
 }
 
-/* Eyebrow sits directly above the heading in the same column. Never beside it. */
+/* Section header: a title and its lede on one column, with the tally set
+ * against the right edge on a wide screen. */
 .section__head {
-  display: block;
-  max-width: 62ch;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2xs) var(--space-sm);
 }
 
-/* One step below the page title. At the same size as it, two headings competed
- * for the top of the page and the section lost. */
+.section__head > div {
+  min-width: 0;
+  flex: 1 1 20rem;
+}
+
 .section__title {
   font-size: var(--text-lg);
 }
 
-/* The page title has to outrank the section titles. The display step is not a
- * token this stylesheet can count on, and without a fallback the h1 fell back to
- * inherited body size and rendered smaller than the h2s under it. */
-h1.section__title {
-  font-size: var(--text-display, var(--text-xl));
-  margin-block: var(--space-3xs) var(--space-xs);
-}
-
-.eyebrow {
-  color: var(--color-muted);
-  font-family: var(--font-readout);
-  font-size: var(--text-xs);
-  letter-spacing: var(--tracking-readout);
-  text-transform: uppercase;
-}
-
-/* Operational prose, not UI copy: a measure of about 65 characters and the body
- * leading, so a paragraph of retention rules is read once instead of skimmed. */
 .section__lede {
-  color: var(--color-muted);
+  color: var(--muted);
   font-size: var(--text-sm);
-  line-height: var(--lh-body);
   max-width: 62ch;
   text-wrap: pretty;
 }
 
-/* An h1 carries its own block margin and an h2 does not, so without this the
- * paragraph under the detections heading sat flush against it. */
-h2.section__title + .section__lede {
-  margin-block-start: var(--space-xs);
+/* ---------------------------------------------------------------- topbar --- */
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-sticky);
+  background: var(--bg);
+  border-bottom: 1px solid var(--rule);
 }
 
-/* ----------------------------------------------------------- notice ------ */
+.topbar__inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-2xs) var(--space-sm);
+  width: min(100% - 2rem, var(--workspace));
+  margin-inline: auto;
+  padding-block: var(--space-xs);
+}
+
+.topbar__name {
+  font-size: var(--text-md);
+}
+
+.topbar__state {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3xs);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* ---------------------------------------------------------------- notice --- */
 
 .notice {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: var(--space-sm) var(--space-md);
-  padding: var(--space-sm) var(--space-md);
-  border: 1px solid var(--color-rule-2);
-  border-inline-start: 3px solid var(--color-muted);
-  border-radius: var(--radius-md);
-  background: var(--color-paper-2);
-  color: var(--color-ink-2);
-  max-width: 78rem;
+  gap: var(--space-xs) var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
+  border: 1px solid var(--rule);
+  border-inline-start: 2px solid var(--muted);
+  border-radius: var(--radius);
+  background: var(--surface);
 }
 
 .notice[data-tone="bad"] {
-  border-inline-start-color: var(--color-bad);
+  border-inline-start-color: var(--tone-bad);
 }
 
 .notice[data-tone="warn"] {
-  border-inline-start-color: var(--color-stale);
+  border-inline-start-color: var(--tone-warn);
 }
 
 .notice__text {
   min-width: 0;
-  overflow-wrap: anywhere;
   font-size: var(--text-sm);
-  max-width: 60ch;
+  max-width: 68ch;
+  text-wrap: pretty;
 }
 
 .notice[data-tone="bad"] .notice__text {
-  color: var(--color-ink);
+  color: var(--ink);
 }
 
-/* ------------------------------------------------------------ buttons ---- */
+/* --------------------------------------------------------------- buttons --- */
 
+/* The default control: a neutral soft fill and a quiet boundary. Everything
+ * louder on this page is deliberate and there is very little of it. */
 .btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: var(--tap-min);
-  min-width: var(--tap-min);
-  padding: var(--space-xs) var(--space-md);
-  border: 1px solid var(--color-rule-2);
-  border-radius: var(--radius-md);
-  background: var(--color-paper-3);
-  color: var(--color-ink);
-  font-family: var(--font-body);
-  /* Every control this page offers the pointer is set at the same size, so a chip,
-   * a button, a check label and a page number are all read at the size they are
-   * aimed at. tokens.css steps straight from 13 px to 16 px, so the 14 px control
-   * size is declared here rather than approximated with the wrong step. */
-  font-size: 0.875rem;
+  gap: var(--space-3xs);
+  min-height: var(--control-h);
+  padding: 0 var(--space-xs);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--control-size);
   font-weight: 500;
   line-height: 1;
-  cursor: pointer;
   white-space: nowrap;
+  cursor: pointer;
   transition:
     background-color var(--dur-micro) var(--ease-out),
     border-color var(--dur-micro) var(--ease-out),
     color var(--dur-micro) var(--ease-out);
 }
 
-/* The plain button had no resting change at all, so half the controls on the
- * page gave no answer to a pointer. Gated: on touch a hover would latch on the
- * first tap and read as the wrong button. */
 @media (hover: hover) and (pointer: fine) {
   .btn:not([disabled]):hover {
-    background: var(--color-paper-4);
-    border-color: var(--color-rule-3);
-  }
-}
-
-.btn--primary {
-  background: var(--color-accent-fill);
-  border-color: var(--color-accent-fill);
-  color: var(--color-accent-fill-ink);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .btn--primary:hover {
-    background: var(--color-accent);
-    border-color: var(--color-accent);
-  }
-}
-
-/* A way out of the current view rather than a move through it: Latest is not a
- * step in a run, it is the single jump back to the newest page, so it takes the
- * page's own background and keeps only the hairline the other buttons have. */
-.btn--quiet {
-  background: transparent;
-  color: var(--color-muted);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .btn--quiet:not([disabled]):hover {
-    background: var(--color-paper-3);
-    color: var(--color-ink);
+    background: var(--surface-3);
+    border-color: var(--rule-3);
   }
 }
 
@@ -307,7 +231,9 @@ h2.section__title + .section__lede {
 }
 
 .btn[disabled] {
-  opacity: 0.55;
+  background: transparent;
+  border-color: var(--rule);
+  color: var(--faint);
   cursor: not-allowed;
 }
 
@@ -315,79 +241,187 @@ h2.section__title + .section__lede {
   transform: none;
 }
 
-/* Destructive, stated as such at the point of choice: the outline carries the
- * warning colour in the resting state, and fills only under a pointer that has
- * committed to it. Never a second accent colour. */
-.btn--danger {
+/* A secondary action, or a way out of the current view. No fill to begin with,
+ * so it sits behind the neutral buttons without disappearing. */
+.btn--quiet {
   background: transparent;
-  border-color: var(--color-bad);
-  color: var(--color-bad);
+  border-color: transparent;
+  color: var(--muted);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .btn--danger:hover {
-    background: var(--color-bad);
-    border-color: var(--color-bad);
-    color: var(--color-graphite);
+  .btn--quiet:not([disabled]):hover {
+    background: var(--surface-2);
+    border-color: var(--rule);
+    color: var(--ink);
   }
 }
 
-/* The one filled destructive control: the confirmation inside the dialog, which
- * is the only place an irreversible action is completed. */
+/* The one filled control on the page, and only while something needs retrying. */
+.btn--primary {
+  background: var(--accent-fill);
+  border-color: var(--accent-fill);
+  color: var(--accent-fill-ink);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn--primary:not([disabled]):hover {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+}
+
+/* Destructive: an outline that says so at the point of choice. A pointer that
+ * merely crosses it dims it a little, after a beat, and never fills it or
+ * changes its hue — the two buttons that do either would flash a decision back
+ * at someone whose cursor was on its way somewhere else. */
+.btn--danger:not([disabled]) {
+  background: transparent;
+  border-color: var(--tone-bad);
+  color: var(--tone-bad);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn--danger:not([disabled]):hover {
+    background: oklch(70% 0.14 26 / 0.1);
+    border-color: oklch(70% 0.14 26 / 0.5);
+    color: oklch(70% 0.14 26 / 0.72);
+    transition-delay: var(--dur-hold);
+  }
+}
+
+/* The confirmation is the only place an irreversible action is completed, so it
+ * stays the same red at full strength and only settles back into the dialog a
+ * little. */
 .btn--confirm {
-  background: var(--color-bad);
-  border-color: var(--color-bad);
-  color: var(--color-graphite);
+  background: var(--tone-bad);
+  border-color: var(--tone-bad);
+  color: var(--well);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .btn--confirm:hover {
-    background: var(--color-stale);
-    border-color: var(--color-stale);
+  .btn--confirm:not([disabled]):hover {
+    background: oklch(70% 0.14 26 / 0.78);
+    border-color: oklch(70% 0.14 26 / 0.78);
+    transition-delay: var(--dur-hold);
   }
 }
 
-/* In-flight: the label stays readable, the control stops accepting input. */
 .btn[data-busy="true"] {
+  opacity: 0.7;
   cursor: progress;
-  opacity: 0.75;
 }
 
-/* ------------------------------------------------------------- feeds ----- */
+/* Icon-only control: the same 40/44 target as every other button, so a close
+ * icon is as easy to hit as a labelled one. */
+.btn--icon {
+  padding: 0;
+  inline-size: var(--control-h);
+  min-inline-size: var(--control-h);
+}
+
+/* One stroke weight and one optical size across every icon on the page. Drawn
+ * from the currentColor, so a disabled button greys its own glyph. */
+.icon {
+  inline-size: 16px;
+  block-size: 16px;
+  flex: none;
+}
+
+/* ----------------------------------------------------------------- feeds --- */
 
 .feeds {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-lg);
+  gap: var(--space-md) var(--space-md);
 }
 
+/* A camera is the picture and the two sentences under it. No card around it:
+ * the frame is the object. */
 .feed {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-sm);
-  padding: var(--space-sm);
-  border: 1px solid var(--color-rule-2);
-  border-radius: var(--radius-lg);
-  background: var(--color-paper-2);
+  display: block;
   min-width: 0;
 }
 
-/* The main streams are 2560×1440, which is 16:9, so the frame is reserved at
- * 16:9 and the whole frame is fitted into it: a card is not a crop of the
- * picture. Event thumbnails below are a small fixed box instead, filled, because
- * fifty of them only stay on one grid if their box is fixed too. */
-.feed__frame {
-  position: relative;
-  aspect-ratio: 16 / 9;
-  overflow: hidden;
-  border: 1px solid var(--color-rule);
-  border-radius: var(--radius-md);
-  background: var(--color-paper-3);
+/* The card is one always-open, non-modal <dialog> that is styled into the grid
+ * rather than laid over it. Everything the user agent would do to a dialog is
+ * undone here — position, margin, padding, border, surface, and the open dialog's
+ * own size ceilings — so at rest it is only a column of block boxes. Only
+ * :modal changes anything structural. */
+.feed__panel {
+  position: static;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+  inline-size: 100%;
+  max-inline-size: none;
+  max-block-size: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  overflow: visible;
 }
 
-/* The player element and the <video> it builds are both filled to the frame, so
- * the reserved geometry holds and nothing shifts when a frame lands. The video
- * is set by the player, not by markup here. */
+/* Expanded: almost the whole viewport, in the top layer, and nothing scrolls.
+ * A viewport dialog rather than a requestFullscreen call, so the browser's own
+ * fullscreen gesture, its controls and its exit key stay out of the way. */
+.feed__panel:modal {
+  position: fixed;
+  inset: var(--space-2xs);
+  inline-size: auto;
+  block-size: calc(100dvh - 2 * var(--space-2xs));
+  max-inline-size: none;
+  max-block-size: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--well);
+  overflow: hidden;
+}
+
+.feed__panel:modal::backdrop {
+  background: oklch(10% 0.005 258 / 0.82);
+}
+
+/* Expanded, the facts become a bar above the picture and the picture takes
+ * everything that is left. The stream is the reason the card was opened, so it
+ * is the largest thing on screen. */
+.feed__panel:modal .feed__labels {
+  order: -1;
+  flex: none;
+  padding: var(--space-2xs) var(--space-sm);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+.feed__panel:modal .feed__name {
+  font-size: var(--text-md);
+}
+
+.feed__panel:modal .feed__frame {
+  flex: 1 1 auto;
+  min-block-size: 0;
+  aspect-ratio: auto;
+  border: 0;
+  border-radius: 0;
+}
+
+/* The main streams are 2560×1440, so the frame is reserved at 16:9 and the
+ * whole picture is fitted into it rather than cropped. */
+.feed__frame {
+  position: relative;
+  flex: none;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+}
+
 .feed__frame > zone-live,
 .feed__frame video {
   position: absolute;
@@ -401,15 +435,15 @@ h2.section__title + .section__lede {
   object-fit: contain;
 }
 
-/* With no picture arriving the frame goes black rather than holding the last
- * frame, which would read as live. The reason is in the placeholder over it. */
+/* No picture means the frame goes dark rather than holding a stale frame, which
+ * would read as live. The reason sits over it. */
 .feed__frame[data-video="off"] {
-  background: var(--color-graphite);
+  background: var(--well);
 }
 
-/* Opaque and above the video it covers: the player element stays connected and
- * visible while it starts, so the blank picture is hidden with this layer
- * rather than by hiding the player itself. */
+/* Opaque and above the video it covers. The player element is never hidden: it
+ * tears its own connection down when it reads as not visible, so hiding it while
+ * it starts would stop it before a frame could arrive. */
 .feed__placeholder {
   position: absolute;
   inset: 0;
@@ -417,469 +451,398 @@ h2.section__title + .section__lede {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: var(--space-sm);
-  background: var(--color-graphite);
-  color: var(--color-muted);
+  padding: var(--space-xs);
+  background: var(--well);
+  color: var(--muted);
   font-size: var(--text-sm);
   text-align: center;
   overflow-wrap: anywhere;
 }
 
-.feed__meta {
+.feed__labels {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3xs);
+  gap: 2px;
   min-width: 0;
+  padding-inline: 2px;
+}
+
+.feed__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-width: 0;
+}
+
+/* At rest the card offers one way in; expanded it offers one way back. The
+ * close icon is that way: Escape and a backdrop click take the same road. */
+.feed__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin-inline-start: auto;
+}
+
+.feed__actions > * {
+  display: none;
+}
+
+.feed__panel:not(:modal) .feed__actions > [data-feed="expand"],
+.feed__panel:modal .feed__actions > [data-feed="close"] {
+  display: inline-flex;
 }
 
 .feed__name {
-  font-size: var(--text-md);
-  font-family: var(--font-readout);
-  font-weight: 500;
+  font-size: var(--text-control);
+  font-weight: 600;
   letter-spacing: 0;
 }
 
-.readout {
-  font-family: var(--font-readout);
+/* Three quiet facts on one line, each with its own tick: the picture, the
+ * detector and the last frame. Neither readout borrows the other's tick. */
+.feed__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px var(--space-xs);
+  color: var(--muted);
   font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-  color: var(--color-muted);
-  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+.feed__status {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-/* Two independent readouts per card: the picture and the detector. Neither
- * borrows the other's tick. */
+/* Separators drawn as an empty pseudo-element, so no character is added to the
+ * accessibility tree. */
+.feed__line > * + *::before {
+  content: "";
+  display: inline-block;
+  flex: none;
+  inline-size: 1px;
+  block-size: 0.75em;
+  margin-inline-end: var(--space-xs);
+  translate: 0 -1px;
+  background: var(--rule-2);
+}
+
 .feed__detect {
-  color: var(--color-faint);
+  color: var(--muted);
 }
 
 .feed__stamp {
-  color: var(--color-faint);
+  font-family: var(--font-num);
+  font-variant-numeric: tabular-nums;
+  color: var(--faint);
 }
 
-/* Status tick: shape + colour, and the word beside it carries the meaning. */
+/* Status tick: shape and colour, with the word beside it carrying the meaning. */
 .tick {
-  inline-size: 8px;
-  block-size: 8px;
+  inline-size: 6px;
+  block-size: 6px;
   flex: none;
   border-radius: var(--radius-pill);
-  background: var(--color-faint);
+  background: var(--faint);
 }
 
 .tick[data-tone="ok"] {
-  background: var(--color-ok);
+  background: var(--tone-ok);
 }
 
 .tick[data-tone="warn"] {
-  background: var(--color-stale);
+  background: var(--tone-warn);
 }
 
 .tick[data-tone="bad"] {
-  background: var(--color-bad);
+  background: var(--tone-bad);
 }
 
-.tick[data-tone="pending"] {
-  background: var(--color-faint);
-}
+/* ----------------------------------------------------------------- stats --- */
 
-/* ------------------------------------------------------------- strip ----- */
-
-.readout-strip {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  border: 1px solid var(--color-rule-2);
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  background: var(--color-graphite);
-}
-
-.readout-strip__item {
+/* Four numbers in one quiet line. No boxes: the labels and the values are the
+ * content, and the page already has enough frames. */
+.stats {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
+  gap: var(--space-3xs) var(--space-md);
+  padding-block: var(--space-xs);
+  border-top: 1px solid var(--rule);
+}
+
+.stats__item {
+  display: flex;
+  align-items: baseline;
   gap: var(--space-3xs);
-  padding: var(--space-sm) var(--space-md);
   min-width: 0;
 }
 
-.readout-strip__item + .readout-strip__item {
-  border-inline-start: 1px solid var(--color-rule);
-}
-
-.readout-strip dt {
-  color: var(--color-muted);
-  font-family: var(--font-readout);
+.stats dt {
+  color: var(--muted);
   font-size: var(--text-xs);
-  letter-spacing: var(--tracking-readout);
-  text-transform: uppercase;
+  font-weight: 500;
+  white-space: nowrap;
 }
 
-.readout-strip dd {
-  color: var(--color-ink);
-  font-family: var(--font-readout);
-  font-size: var(--text-md);
+.stats dd {
+  color: var(--ink);
+  font-family: var(--font-num);
+  font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 
-/* ------------------------------------------------------------ events ----- */
+/* ----------------------------------------------------------------- tally --- */
 
+.tally {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  text-wrap: pretty;
+}
+
+/* --------------------------------------------------------------- filters --- */
+
+/* Tab-style: no boxes, and the selection is a background with an underline. */
 .filters {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-xs);
+  gap: var(--space-3xs);
+  border-bottom: 1px solid var(--rule);
 }
 
-.chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: var(--tap-min);
-  padding: var(--space-xs) var(--space-sm);
-  border: 1px solid var(--color-rule-2);
-  border-radius: var(--radius-md);
+.tab {
+  position: relative;
+  min-height: var(--control-h);
+  padding: 0 var(--space-xs);
+  border: 0;
+  border-radius: var(--radius) var(--radius) 0 0;
   background: transparent;
-  color: var(--color-ink-2);
-  font-family: var(--font-readout);
-  /* The same control size as .btn — a chip is a button that happens to hold a
-   * state, and it was set a step smaller than the actions beside it. */
-  font-size: 0.875rem;
-  letter-spacing: 0.02em;
+  color: var(--muted);
+  font-family: var(--font-sans);
+  font-size: var(--control-size);
+  font-weight: 500;
   cursor: pointer;
-  white-space: nowrap;
   transition:
     background-color var(--dur-micro) var(--ease-out),
-    border-color var(--dur-micro) var(--ease-out),
     color var(--dur-micro) var(--ease-out);
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .chip:hover {
-    background: var(--color-paper-3);
-    border-color: var(--color-rule-3);
+  .tab:hover {
+    background: var(--surface);
+    color: var(--ink);
   }
 }
 
-.chip:active {
+.tab:active {
   transform: scale(0.98);
 }
 
-.chip.is-on {
-  background: var(--color-accent-quiet);
-  border-color: var(--color-accent-line);
-  color: var(--color-ink);
+.tab.is-on {
+  background: var(--surface);
+  color: var(--ink);
 }
 
-.events__tally {
-  color: var(--color-muted);
+/* Drawn rather than animated: an underline cannot lag a click the way a
+ * width transition can. */
+.tab.is-on::after {
+  content: "";
+  position: absolute;
+  inset-inline: var(--space-2xs);
+  inset-block-end: -1px;
+  block-size: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
 }
 
-/* ------------------------------------------------------------- review ----- */
+/* ---------------------------------------------------------------- legend --- */
 
-/* What is shown, what is ticked, and the two actions that are not the same
- * action, stacked above the list. The count sits between them so a growing
- * selection is visible without opening the confirmation. */
-.review {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-xs);
-  /* The empty result below is taken out of the flow, and this is what it is
-   * taken out against. */
-  position: relative;
-}
-
-/* A legend is body copy, not a machine readout. At 11 px mono this was the
- * hardest paragraph on the page to read, and it is the one that explains what
- * the row words mean. */
-.events__rules {
-  max-width: 66ch;
-  color: var(--color-muted);
-  font-family: var(--font-body);
+.legend {
+  color: var(--muted);
   font-size: var(--text-sm);
-  letter-spacing: 0;
-  line-height: var(--lh-body);
+  max-width: 70ch;
   text-wrap: pretty;
 }
 
-.events__rules strong {
-  color: var(--color-ink-2);
+.legend summary {
+  color: var(--ink-2);
   font-weight: 500;
+  cursor: pointer;
 }
 
-/* The selection controls are boxed as one object, so no button in it can be
- * read as the archive-wide action further down the page. The band takes the full
- * 4 pt step rather than clipping the 44 px hit floors it holds, so the controls
- * inside it are not touching the frame they sit in. */
-.review__bar {
+.legend p {
+  margin-block-start: var(--space-3xs);
+}
+
+.legend strong {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
+/* -------------------------------------------------------------- toolbar --- */
+
+/* The selection controls, the outcome line and the pager, stacked between the
+ * filters above and the list below. Relative because the empty outcome line is
+ * taken out of the flow against it. */
+.review {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2xs);
+}
+
+/* The selection controls, flat, between two hairlines. No band around them: the
+ * list below and the archive area under it are already the boundaries, and a
+ * third frame between the two would compete with both. */
+.toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-xs) var(--space-sm);
-  padding: var(--space-xs) var(--space-sm);
-  border: 1px solid var(--color-rule-2);
-  border-radius: var(--radius-md);
-  background: var(--color-paper-2);
+  gap: var(--space-3xs) var(--space-2xs);
+  padding-block: var(--space-3xs);
+  border-top: 1px solid var(--rule);
+  border-bottom: 1px solid var(--rule);
 }
 
 .check {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-xs);
-  min-height: var(--tap-min);
+  gap: var(--space-3xs);
+  min-height: var(--control-h);
+  padding-inline: var(--space-3xs);
+  border-radius: var(--radius);
+  font-size: var(--control-size);
+  color: var(--ink-2);
   cursor: pointer;
 }
 
-.check__label {
-  color: var(--color-ink-2);
-  font-size: 0.875rem;
-}
-
-.check__input {
-  inline-size: 1.125rem;
-  block-size: 1.125rem;
+.check__input,
+.event__check {
+  inline-size: 14px;
+  block-size: 14px;
   margin: 0;
-  accent-color: var(--color-accent-fill);
+  accent-color: var(--accent-fill);
   cursor: pointer;
   flex: none;
 }
 
-.check__input:disabled {
+.check__input:disabled,
+.event__check:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .check__input:disabled + .check__label {
-  color: var(--color-faint);
+  color: var(--faint);
 }
 
-.review__count {
+.toolbar__count {
   margin-inline-start: auto;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
 }
 
-/* Deleting the ticked rows is irreversible too, so it says so at the point of
- * choice exactly as the archive-wide button does. What separates the two is the
- * block, not the colour: this one is inside the selection band, that one is in
- * the archive card below the list. Disabled stays neutral, because an inactive
- * control should not read as a live threat. */
-#delete-selected:not([disabled]) {
-  border-color: var(--color-bad);
-  color: var(--color-bad);
-}
-
-@media (hover: hover) and (pointer: fine) {
-  #delete-selected:not([disabled]):hover {
-    background: var(--color-bad);
-    border-color: var(--color-bad);
-    color: var(--color-graphite);
-  }
-}
-
-/* An outcome is a sentence about what happened, not a value in a table. */
-.review__result {
+/* An outcome is a sentence, not a value in a table. Out of the flow when empty
+ * so it claims none of the gaps, but never display:none — a live region that is
+ * display:none is not announced when it refills. */
+.result {
   min-height: 1lh;
-  max-width: 66ch;
-  font-family: var(--font-body);
+  max-width: 70ch;
   font-size: var(--text-sm);
-  letter-spacing: 0;
-  line-height: var(--lh-body);
   text-wrap: pretty;
 }
 
-/* With nothing to say it occupies nothing: out of the flow, so it also claims none
- * of the stack's gaps, and back in flow the moment it has a sentence. Not
- * display:none, because a live region that is display:none is not announced when
- * it refills — it has to stay in the accessibility tree to be heard at all. */
-.review__result:empty {
+.result:empty {
   position: absolute;
   min-height: 0;
 }
 
-.review__result[data-tone="ok"] {
-  color: var(--color-ok);
+.result[data-tone="ok"] {
+  color: var(--tone-ok);
 }
 
-.review__result[data-tone="warn"] {
-  color: var(--color-stale);
+.result[data-tone="warn"] {
+  color: var(--tone-warn);
 }
 
-.review__result[data-tone="bad"] {
-  color: var(--color-bad);
+.result[data-tone="bad"] {
+  color: var(--tone-bad);
 }
 
-.review__result[data-tone="pending"] {
-  color: var(--color-muted);
+.result[data-tone="pending"] {
+  color: var(--muted);
 }
 
-/* ------------------------------------------------------------- pager ----- */
+/* ----------------------------------------------------------------- pager --- */
 
-/* Paging is navigation, so it is a nav landmark with its own name and not another
- * band of buttons inside the review block. It is unboxed, and that is the point:
- * the selection band above acts on ticks and the archive card below is the one
- * destructive action on the screen, so a third framed strip holding nothing but
- * page numbers would put a competing frame between the two of them. */
+/* Constant-size navigation. How many pages there are has nothing to do with how
+ * much room the control takes, so a thousand pages and eight pages are the same
+ * three steps and one line of text. Nothing here is a numbered button, a field
+ * or a select, because none of those can stay the same shape for every count. */
 .pager {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-xs) var(--space-2xs);
-  margin-block-start: var(--space-xs);
-}
-
-/* The run of numbers is one control read left to right, so it keeps its own gaps
- * and its own baseline instead of dissolving into the row around it. It wraps at
- * 320 rather than overflowing, which is the same answer the selection band gives.
- * The markers are off: the page numbers are the content, and the base rule that
- * clears them is written for a ul, not for this ol. */
-.pager__pages {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
   gap: var(--space-2xs);
-  list-style: none;
-  margin: 0;
-  padding: 0;
+}
+
+/* Where the page is on screen, said in words rather than typed. Read-only, so a
+ * poll restating the same page says nothing new. */
+.pager__status {
+  flex: 1 1 auto;
   min-width: 0;
-}
-
-/* One size for every control in the pager: the two steps, the numbers and the way
- * back to the newest page are all the same 44 px target, the same 14 px sans label
- * and the same fixed 40 px box, so the row reads as one band of hit targets instead
- * of a set of differently sized boxes. The digits are tabular because a run of
- * page numbers sits side by side and must not reflow as it moves. The vertical
- * padding is dropped because the height is the hit floor and the flex centring
- * already places the label inside it. */
-.pager .btn {
-  min-inline-size: 2.5rem;
-  padding: 0 var(--space-sm);
+  color: var(--muted);
+  font-size: var(--text-sm);
   font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
 }
 
-/* The page on screen, stated once by the accent and once only. It is marked rather
- * than pressed, so it is disabled — and the disabled wash is lifted back off,
- * because an accent the operator cannot read is not an accent that tells them
- * anything. */
-.pager__page[aria-current="page"] {
-  background: var(--color-accent-quiet);
-  border-color: var(--color-accent-line);
-  color: var(--color-ink);
-  opacity: 1;
-}
-
-/* What stands between two runs of pages. Not a control: nothing to press, nothing
- * to focus, nothing to disable — the numbers either side of it are how the
- * operator crosses it, and it is hidden from assistive technology because it says
- * nothing they are not already told by the numbers. */
-.pager__gap {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-inline-size: 1.25rem;
-  color: var(--color-faint);
-  font-family: var(--font-body);
-  font-size: 0.875rem;
-  user-select: none;
-}
-
-/* The archive-wide action is a separate block, below the list and below the
- * boundary it crosses: not the selection, and not the fifty rows on screen. The
- * leading hairline of the warning colour is the whole signal — it stays a quiet
- * card, it cannot be mistaken for the selection band, and the extra margin keeps
- * it from reading as part of the list above it. */
-.archive {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--space-sm);
-  margin-block-start: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  border: 1px solid var(--color-rule-2);
-  border-inline-start: 2px solid var(--color-bad);
-  border-radius: var(--radius-lg);
-  background: var(--color-paper-2);
-  max-width: 78rem;
-}
-
-.archive__title {
-  color: var(--color-ink);
-  font-size: var(--text-md);
-  font-weight: 600;
-  line-height: var(--lh-tight);
-  letter-spacing: var(--tracking-tight);
-  margin-block-end: var(--space-xs);
-}
+/* --------------------------------------------------------------- events --- */
 
 .events {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--color-rule-2);
+  border: 1px solid var(--rule);
   border-radius: var(--radius-lg);
-  background: var(--color-paper-2);
+  background: var(--surface);
+  overflow-y: auto;
+  /* Seven 92px rows, so the taller thumbnail does not cost a row on screen. */
+  max-height: 40rem;
+  scrollbar-color: var(--rule-3) var(--surface);
 }
 
-/* Three fixed columns and one flexible one: the hit floor, the picture, then
- * whatever the row has left. minmax(0, 1fr) is what lets a long camera or zone
- * name wrap inside the row instead of pushing fifty rows wider than the screen.
- * The row is a fixed height because the picture is: 12 + 54 + 12. */
+/* A narrow tick column, a 112×84 thumbnail, then the row's own text. minmax(0,
+ * 1fr) is what lets a long camera or zone name wrap inside the row rather than
+ * pushing fifty rows wider than the screen. */
 .event {
   display: grid;
-  grid-template-columns: var(--tap-min) 72px minmax(0, 1fr);
+  grid-template-columns: 28px 112px minmax(0, 1fr);
   align-items: center;
-  column-gap: var(--space-sm);
-  row-gap: var(--space-2xs);
-  padding: var(--space-sm) var(--space-md);
+  column-gap: var(--space-2xs);
+  padding: var(--space-3xs) var(--space-xs);
   min-width: 0;
 }
 
 .event + .event {
-  border-top: 1px solid var(--color-rule);
+  border-top: 1px solid var(--rule);
 }
 
-/* 72 × 54: a small fixed box, always filled. At this size the snapshot's own
- * crop ratio buys nothing that a fixed box does not, and a fixed box is what
- * keeps fifty rows on one grid. */
+/* 112 × 84, filled. The snapshot's own crop ratio buys nothing at this size and a
+ * fixed box is what keeps the rows on one grid. */
 .event__shot {
   display: block;
-  inline-size: 72px;
-  aspect-ratio: 4 / 3;
+  inline-size: 112px;
+  block-size: 84px;
   overflow: hidden;
-  border: 1px solid var(--color-rule-2);
   border-radius: var(--radius-sm);
-  background: var(--color-paper-3);
-}
-
-/* The one part of the row that opens something, so it is the one part that
- * answers a pointer. Instant, not transitioned: rows are rebuilt on every poll
- * and this surface is scanned, not admired. */
-@media (hover: hover) and (pointer: fine) {
-  .event__shot:hover {
-    border-color: var(--color-rule-3);
-    background: var(--color-paper-4);
-  }
-}
-
-/* The tick target is the full hit floor, sitting before the picture and outside
- * its link: selecting a row never opens the snapshot. */
-.event__pick {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  inline-size: var(--tap-min);
-  block-size: var(--tap-min);
-  cursor: pointer;
-}
-
-.event__check {
-  inline-size: 1.125rem;
-  block-size: 1.125rem;
-  margin: 0;
-  accent-color: var(--color-accent-fill);
-  cursor: pointer;
-}
-
-/* A delete in flight has already captured what it will send, so these boxes are
- * dead: they say so rather than accepting a tick that changes nothing. */
-.event__check:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
+  background: var(--well);
 }
 
 .event__img {
@@ -889,142 +852,182 @@ h2.section__title + .section__lede {
   object-fit: cover;
 }
 
+/* The one part of the row that opens something, so the one part that answers a
+ * pointer. Instant: rows are rebuilt on every poll and this surface is scanned,
+ * not admired. */
+@media (hover: hover) and (pointer: fine) {
+  .event__shot:hover {
+    box-shadow: inset 0 0 0 1px var(--rule-3);
+  }
+}
+
+/* The tick target sits outside the snapshot link: selecting a row never opens
+ * the picture. 28px wide so the box sits close to the edge of the row, and
+ * 28×40 so it still clears the 24px minimum target on its short side. */
+.event__pick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: 28px;
+  block-size: var(--control-h);
+  cursor: pointer;
+}
+
 .event__body {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3xs);
+  gap: 2px;
   min-width: 0;
 }
 
-.event__head {
+/* Which camera and where, at full voice. The time is pushed to the right edge
+ * so the dates line up down the column. */
+.event__line {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-2xs) var(--space-xs);
+  gap: 2px var(--space-xs);
   min-width: 0;
-  overflow-wrap: anywhere;
 }
 
-/* Which camera, at full voice: the one fact every row is scanned for. */
 .event__camera {
-  color: var(--color-ink);
-  font-family: var(--font-readout);
-  font-size: var(--text-sm);
+  color: var(--ink);
+  font-size: var(--text-control);
+  font-weight: 600;
 }
 
-/* Which part of the picture, in machine voice and one step back — a zone name
- * is whatever the service is configured with, so it is allowed to be long and
- * to break. */
 .event__zone {
-  color: var(--color-muted);
-  font-family: var(--font-readout);
-  font-size: var(--text-xs);
-  letter-spacing: 0.04em;
+  color: var(--muted);
+  font-size: var(--text-sm);
   min-width: 0;
   overflow-wrap: anywhere;
 }
 
-/* Retention, stated on the row from what this event carries. It is a fact about
- * the snapshot, not a control: the only thing that changes it is an explicit
- * deletion confirmed in the dialog below.
- *
- * Plain sentence case, no pill, no fill. Painted as a badge on all fifty rows it
- * would claim every snapshot on the page is held for review and the accent would
- * stop meaning anything, so the words carry it and a hairline rule separates the
- * status from the camera and the zone. */
-.event__kept {
-  color: var(--color-ink-2);
-  font-family: var(--font-body);
+.event__time {
+  margin-inline-start: auto;
+  color: var(--muted);
   font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Retention and the 60-second dwell, one step below the line above them. Both
+ * are facts read off the event, and both are plain words: painted as badges on
+ * fifty rows they would claim every snapshot on the page is held for review and
+ * the accent would stop meaning anything. */
+.event__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-xs);
+  color: var(--muted);
+  font-size: var(--text-xs);
+  min-width: 0;
+}
+
+.event__tag {
   overflow-wrap: anywhere;
 }
 
-/* The 60 s dwell, shown only on a row that entered the secondary zone. It says
- * how long someone was in view and nothing about why, so it sits one step below
- * the retention fact rather than competing with it. */
-.event__flag {
-  color: var(--color-muted);
-  font-family: var(--font-body);
-  font-size: var(--text-xs);
-  overflow-wrap: anywhere;
-}
-
-/* The separator is an empty pseudo-element, so it draws a rule without putting
- * a character in the accessibility tree. */
-.event__kept::before,
-.event__flag::before {
+.event__tags > * + *::before {
   content: "";
   display: inline-block;
+  flex: none;
   inline-size: 1px;
-  block-size: 0.7em;
+  block-size: 0.75em;
   margin-inline-end: var(--space-xs);
-  translate: 0 0.1em;
-  background: var(--color-rule-3);
+  translate: 0 -1px;
+  background: var(--rule-2);
 }
-
-/* The time is the other fact every row is scanned for, so it is set at meta
- * size in the same voice as the camera name. */
-.event__time {
-  color: var(--color-ink-2);
-  font-size: var(--text-sm);
-  letter-spacing: 0;
-}
-
-/* The same vocabulary stays body text in the rules paragraph above the list.
- * Painted as badges there it would claim every snapshot on the page is retained,
- * which is a per-event flag this page reads from the event; as text it reads as
- * the legend, and the sentence after each word says what the flag means. */
 
 .events__empty {
-  padding: var(--space-lg) var(--space-md);
-  border: 1px dashed var(--color-rule-2);
+  padding: var(--space-md);
+  border: 1px dashed var(--rule-2);
   border-radius: var(--radius-lg);
-  color: var(--color-muted);
+  color: var(--muted);
   font-size: var(--text-sm);
   max-width: 60ch;
 }
 
-/* ---------------------------------------------------------- dialog ------- */
+/* --------------------------------------------------------------- archive --- */
 
-/* Native <dialog>, modal, no component and no motion of its own: the browser
- * draws the surface, the focus trap and the backdrop behaviour. Only the two
- * deliberate colours are set here. */
+/* Its own band under a hairline, so it cannot be read as part of the list, and
+ * flat, so it cannot be read as one of the row actions either. */
+.archive {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2xs) var(--space-sm);
+  margin-block-start: var(--space-2xs);
+  padding-block-start: var(--space-sm);
+  border-top: 1px solid var(--rule);
+}
+
+.archive__text {
+  min-width: 0;
+  flex: 1 1 22rem;
+}
+
+.archive__title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3xs);
+  font-size: var(--text-control);
+  letter-spacing: 0;
+}
+
+.archive__title::before {
+  content: "";
+  inline-size: 6px;
+  block-size: 6px;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--tone-bad);
+  translate: 0 -1px;
+}
+
+.archive__note {
+  color: var(--muted);
+  font-size: var(--text-sm);
+  max-width: 70ch;
+  text-wrap: pretty;
+}
+
+/* --------------------------------------------------------------- dialog --- */
+
+/* Native <dialog>: the browser draws the surface, the focus trap and the
+ * backdrop. Only the two deliberate colours are set here. */
 .confirm {
   inline-size: min(30rem, calc(100vw - 2rem));
-  /* The scope sentence is long and a landscape phone is short: the dialog never
-   * grows past the viewport and scrolls inside itself rather than being cut off
-   * with its own confirm button below the fold. */
   max-block-size: calc(100dvh - 2rem);
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: var(--space-md);
-  border: 1px solid var(--color-rule-2);
+  padding: var(--space-sm);
+  border: 1px solid var(--rule-2);
   border-radius: var(--radius-lg);
-  background: var(--color-paper-2);
-  color: var(--color-ink-2);
+  background: var(--surface);
+  color: var(--ink-2);
 }
 
 .confirm::backdrop {
-  background: oklch(10% 0.008 256 / 0.72);
+  background: oklch(10% 0.005 258 / 0.72);
 }
 
 .confirm__title {
   font-size: var(--text-md);
-  margin-block-end: var(--space-sm);
+  margin-block-end: var(--space-2xs);
 }
 
 .confirm__scope {
-  color: var(--color-ink);
+  color: var(--ink);
   font-size: var(--text-sm);
-  max-width: 56ch;
   text-wrap: pretty;
 }
 
 .confirm__note {
-  margin-block-start: var(--space-xs);
-  color: var(--color-muted);
+  margin-block-start: var(--space-3xs);
+  color: var(--muted);
   font-size: var(--text-sm);
-  max-width: 56ch;
   text-wrap: pretty;
 }
 
@@ -1032,118 +1035,166 @@ h2.section__title + .section__lede {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  gap: var(--space-xs) var(--space-sm);
-  margin-block-start: var(--space-md);
+  gap: var(--space-2xs);
+  margin-block-start: var(--space-sm);
 }
 
-/* Cancel is the way out and is where this dialog opens, so it reads as the
- * default: a raised control with a crisp boundary, beside the one filled
- * destructive button. It stays first in the DOM, so tabbing, reading and the
- * visual order agree — an irreversible action is never the first control under
- * a thumb that only needs to back out. */
+/* Cancel stays first in the DOM and is where the dialog opens: an irreversible
+ * action is never the first control under a thumb that only needs to back out. */
 #delete-cancel {
-  border-color: var(--color-rule-3);
+  border-color: var(--rule-3);
 }
 
-/* -------------------------------------------------------- responsive ----- */
+/* ------------------------------------------------------------- lightbox --- */
 
-/* Declared before the narrower breakpoint below, so the one-column rules there
-   win on source order at equal specificity. */
-@media (max-width: 64rem) {
-  .readout-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .readout-strip__item:nth-child(2n) {
-    border-inline-start: 0;
-  }
-
-  .readout-strip__item:nth-child(n + 3) {
-    border-top: 1px solid var(--color-rule);
-  }
+/* The one viewer for every snapshot, reused rather than rebuilt per row. It is
+ * a plain modal dialog, so Escape, the backdrop, the focus trap and the focus
+ * the browser hands back on close are the browser's own. */
+/* `display` here beats the user agent's `dialog:not([open]) { display: none }`,
+ * which would otherwise leave the viewer sitting in the page as an empty box
+ * below the archive. */
+.lightbox:not([open]) {
+  display: none;
 }
+
+.lightbox {
+  display: flex;
+  flex-direction: column;
+  inline-size: min(56rem, calc(100vw - 2rem));
+  max-block-size: calc(100dvh - 2rem);
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--well);
+  color: var(--ink-2);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.lightbox::backdrop {
+  background: oklch(10% 0.005 258 / 0.78);
+}
+
+.lightbox__bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) var(--space-sm);
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+}
+
+/* Which camera, and when. This is the dialog's accessible name, so the viewer
+ * says what it is showing and not only that it is showing something. */
+.lightbox__caption {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--ink);
+  font-size: var(--text-sm);
+  overflow-wrap: anywhere;
+}
+
+/* One grid cell, two occupants: the picture and the line that stands in for it
+ * until there is one. The stage therefore sizes to the picture, and a long one
+ * stops at the height the dialog has left. */
+.lightbox__stage {
+  display: grid;
+  min-block-size: 10rem;
+  padding: var(--space-sm);
+  background: var(--well);
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: center;
+}
+
+.lightbox__img {
+  grid-area: 1 / 1;
+  inline-size: 100%;
+  block-size: auto;
+  max-block-size: calc(100dvh - 9rem);
+  object-fit: contain;
+}
+
+.lightbox__state {
+  grid-area: 1 / 1;
+  align-self: center;
+  justify-self: center;
+  max-inline-size: 34ch;
+  text-wrap: pretty;
+}
+
+.lightbox__stage[data-state="ready"] .lightbox__state {
+  display: none;
+}
+
+.lightbox__stage[data-state="error"] .lightbox__state {
+  color: var(--tone-bad);
+}
+
+/* ------------------------------------------------------------ responsive --- */
 
 @media (max-width: 48rem) {
   .feeds {
     grid-template-columns: minmax(0, 1fr);
   }
+}
 
-  .readout-strip {
-    grid-template-columns: minmax(0, 1fr);
+@media (max-width: 40rem) {
+  /* The status line takes its own row above the steps, and the steps share what
+   * is left. The source order is unchanged, so the keyboard order and the visual
+   * order still agree, and the row count is still the same three buttons. */
+  .pager__status {
+    order: -1;
+    flex: 1 1 100%;
+    text-align: start;
   }
 
-  .readout-strip__item + .readout-strip__item {
-    border-inline-start: 0;
-    border-top: 1px solid var(--color-rule);
+  .pager > .btn {
+    flex: 1 1 0;
+    min-inline-size: 0;
+    padding-inline: 8px;
+    gap: 4px;
+  }
+
+  .toolbar__count {
+    margin-inline-start: 0;
+    flex-basis: 100%;
   }
 }
 
 @media (max-width: 30rem) {
-  .bar__inner {
-    gap: var(--space-xs);
-  }
-
-  /* At 320 the row keeps all three columns and only gives the picture its
-   * smaller box — 44 + 8 + 60 + 8 — so the metadata keeps a column of its own
-   * to wrap in instead of the row being pushed wider than the screen. */
+  /* 320 keeps all three row columns and only gives the thumbnail its smaller
+   * box, so the text keeps a column of its own to wrap in. */
   .event {
-    grid-template-columns: var(--tap-min) 60px minmax(0, 1fr);
-    column-gap: var(--space-xs);
+    grid-template-columns: 28px 64px minmax(0, 1fr);
+    column-gap: var(--space-3xs);
   }
 
-  .review__count {
-    margin-inline-start: 0;
+  .event__shot {
+    inline-size: 64px;
+    block-size: 48px;
   }
 
-  /* Below 480 the pager is two rows: the two steps and the way back to the newest
-   * page share one row of three, and the run of page numbers takes a full-width
-   * row under them instead of splitting the controls across two ragged rows. The
-   * source order is unchanged — the numbers stay between the two steps for the
-   * keyboard and for anything reading the page — so the visual rows are placed
-   * with grid areas rather than by moving markup.
-   *
-   * The numbers keep the 40 px box and the 44 px floor they have everywhere else,
-   * so a run too wide for 320 wraps onto a second line of its own rather than
-   * overflowing the screen or being squeezed below a tap target. */
-  .pager {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--space-2xs) var(--space-xs);
+  /* A caption and a close icon on one line, and the picture gets the rest. */
+  .lightbox__stage {
+    padding: var(--space-2xs);
   }
 
-  #page-prev {
-    grid-area: 1 / 1;
-  }
-
-  #page-next {
-    grid-area: 1 / 2;
-  }
-
-  #page-latest {
-    grid-area: 1 / 3;
-  }
-
-  .pager__pages {
-    grid-area: 2 / 1 / 3 / 4;
-    justify-content: center;
-  }
-
-  .pager__gap {
-    min-inline-size: 1rem;
-  }
-
-  /* Narrow enough that the dialog's two actions wrap: each takes a full row, in
-   * the order they are read, so neither can be mistaken for the other. */
-  .confirm__actions {
-    justify-content: flex-start;
+  .lightbox__img {
+    max-block-size: calc(100dvh - 8rem);
   }
 
   .confirm__actions > .btn {
     flex: 1 1 8rem;
   }
+
+  .confirm__actions {
+    justify-content: flex-start;
+  }
 }
 
-/* ---------------------------------------------------------- motion ------ */
+/* --------------------------------------------------------------- motion --- */
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -1155,7 +1206,7 @@ h2.section__title + .section__lede {
   }
 
   .btn:active,
-  .chip:active {
+  .tab:active {
     transform: none;
   }
 }
