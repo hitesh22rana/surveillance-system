@@ -254,6 +254,32 @@ the plan.
 - Access logs are reviewed after go-live. If nobody can say who looked at the
   footage, that is a finding.
 
+## Next phase — activity-based detection (not started)
+
+The rule that exists today — a `person` in a full-frame zone — keeps routine
+detections and **assesses no risk at all**: with the example zones it means "a
+person was on camera", and the retention worker then pins most of those
+snapshots indefinitely. The owner's stated direction for what comes next is
+activity-based suspicious detection, covering activity that suggests weapons or
+harm. That is a design direction recorded here, **not a built feature**: no
+model has been selected, evaluated, or trained, and nothing in this repository
+implements it.
+
+What such a phase would have to define before any of it counts: zones narrowed
+from the full frame to the actual areas of interest, the hours it applies, dwell
+or persistence thresholds, and temporal evidence rather than a single frame —
+suspicion is a sequence, not a still. Output would be a labelled
+"worth reviewing" signal with the evidence a person checks, so validation is a
+**labelled review set plus manual human review**, never an automatic threat
+claim. In that future strategy, **ordinary person presence alone must not
+qualify**.
+
+Until those criteria are implemented, the existing runtime retention stays
+exactly as it is: six hours for an ordinary snapshot, and pinned-until-deleted
+for a `person` event in its own camera's zone. The cleanup that renamed this
+console and removed the header's Frigate links changed no retention behaviour and
+no detection rule.
+
 ## Risks
 
 - **Retention and disk.** Snapshots accumulate, and after the retention worker is
