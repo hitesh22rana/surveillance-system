@@ -13,7 +13,9 @@ offset cannot pass and neither can one that sends the boundary value itself.
 Rows are Frigate-shaped: the singular label, the boolean has_snapshot, a list of
 zones, and a native "<stamp>-<6 lowercase alphanumerics>" id. Filtering=False is
 the one departure, and it is what makes the worker's own label and snapshot
-checks reachable.
+checks reachable. The single-event GET, the delete that removes the row and the
+retain body are here for scripts/check_console_api.py, which drives the gateway
+against this same imitation rather than a second one.
 
     python3 scripts/check_retention.py
 """
@@ -49,7 +51,7 @@ def event(tag, camera, start, zones=None, label="person", snapshot=True, **extra
         "start_time": float(start),
         "end_time": float(start) + 2.5,
         "label": label,
-        "zones": [f"{camera}_area"] if zones is None else list(zones),
+        "zones": [f"{camera}_loitering"] if zones is None else list(zones),
         "has_snapshot": snapshot,
         "snapshot": f"{camera}/snapshot.jpg" if snapshot else None,
         "type": "object",
@@ -75,6 +77,18 @@ def tied_fixture():
     ]
 
 
+def zone_fixture():
+    """Three person snapshots, each qualifying on camera, snapshot and label, so the
+    zone is the only thing left to decide: one that merely entered the ordinary
+    area zone, one that loitered in another camera's loitering zone, and one that
+    loitered in its own."""
+    return [
+        event("areav1", "camera_1", BASE_TIME + 500, zones=["camera_1_area"]),
+        event("loit01", "camera_2", BASE_TIME + 490, zones=["camera_1_loitering"]),
+        event("loit02", "camera_3", BASE_TIME + 480, zones=["camera_3_area", "camera_3_loitering"]),
+    ]
+
+
 def unfiltered_fixture():
     """One event per decision the worker has to make for itself, plus the tied group.
 
@@ -88,7 +102,7 @@ def unfiltered_fixture():
         event("qual02", "camera_1", BASE_TIME + 500),                            # 0  pins
         event("noclip", "camera_2", BASE_TIME + 490, snapshot=False),               # 1  no snapshot
         event("cat001", "camera_3", BASE_TIME + 480, label="cat"),                 # 2  not a person
-        event("wrong2", "camera_4", BASE_TIME + 465, zones=["camera_1_area"]),     # 3  other zone
+        event("wrong2", "camera_4", BASE_TIME + 465, zones=["camera_1_loitering"]),  # 3  other zone
         event("nocam2", "camera_9", BASE_TIME + 460),                              # 4  no such camera
         event("kept02", "camera_1", BASE_TIME + 455, retain_indefinitely=True),     # 5  already pinned
         event("arch02", "camera_1", ANCIENT_TIME, retain_indefinitely=True),        # 6  behind the window
@@ -99,10 +113,14 @@ def unfiltered_fixture():
 class FakeFrigate:
     """The upstream's observable behaviour, and nothing else.
 
-    A read answers has_snapshot, labels, limit, order, before and after, with no
+    A read answers has_snapshot, labels, limit, sort, before and after, with no
     offset branch: any walk that sends one gets the newest page again. Both bounds
-    are strict. A successful retain sets retain_indefinitely, exactly as Frigate
-    does, so the next pass sees the previous pass's work.
+    are strict, and the newest first order is Frigate's sort=date_desc, not an
+    order= direction of its own. A successful retain sets retain_indefinitely,
+    exactly as Frigate does, so the next pass sees the previous pass's work. A
+    successful delete removes the row, so a second delete of the same id answers
+    404 the way the real one does; quiet_deletes and refused_deletes are the two
+    ways a delete can come back 2xx-with-nothing-done or simply fail.
     """
 
     def __init__(self, events, refusals=None, quiet_acks=None, filtering=True):
@@ -111,10 +129,14 @@ class FakeFrigate:
         self.posts = []
         self.pinned = []
         self.deletes = []
+        self.calls = []  # every (method, path), so a caller can prove it sent nothing
+        self.post_bodies = []  # every retain body, so no un-pin can hide in one
         self.attempts = {}
         self.filtering = filtering
         self.refusals = dict.fromkeys(refusals or ())
         self.quiet_acks = dict.fromkeys(quiet_acks or ())
+        self.quiet_deletes = {}
+        self.refused_deletes = {}
 
     def _one(self, query, key, default=None):
         return (query.get(key) or [default])[0]
@@ -135,7 +157,7 @@ class FakeFrigate:
                     if row.get("has_snapshot") is True
                     and (not wanted or row.get("label") in wanted)]
         rows.sort(key=lambda row: row["start_time"],
-                  reverse=self._one(query, "order", "desc") == "desc")
+                  reverse=self._one(query, "sort", "date_desc") == "date_desc")
         before = self._one(query, "before")
         if before is not None:
             rows = [row for row in rows if row["start_time"] < float(before)]
@@ -144,12 +166,29 @@ class FakeFrigate:
             rows = [row for row in rows if row["start_time"] > float(after)]
         return 200, json.dumps(rows[: int(self._one(query, "limit", 100))]).encode()
 
-    def handle(self, method, path, query):
+    def _delete(self, event_id):
+        self.deletes.append(event_id)
+        if event_id in self.refused_deletes:
+            return self.refused_deletes[event_id], b'{"error": "delete failed"}'
+        if event_id in self.quiet_deletes:
+            # HTTP 200 that did not do the thing.
+            return 200, b'{"success": false}'
+        self.events = [row for row in self.events if row["id"] != event_id]
+        return 200, b'{"success": true}'
+
+    def handle(self, method, path, query, body=None):
+        self.calls.append((method, path))
         if method == "GET" and path == "/api/events":
             return self._read(query)
+        if method == "GET" and path.startswith("/api/events/"):
+            stored = self._store(path[len("/api/events/"):])
+            if stored is None:
+                return 404, b'{"error": "not found"}'
+            return 200, json.dumps(stored).encode()
         if method == "POST" and path.startswith("/api/events/") and path.endswith("/retain"):
             event_id = path[len("/api/events/"):-len("/retain")]
             self.posts.append(event_id)
+            self.post_bodies.append(body)
             attempts = self.attempts.get(event_id, 0) + 1
             self.attempts[event_id] = attempts
             # Both refusals are transient upstream conditions — a locked database
@@ -166,9 +205,7 @@ class FakeFrigate:
             self.pinned.append(event_id)
             return 200, b'{"success": true}'
         if method == "DELETE" and path.startswith("/api/events/"):
-            event_id = path[len("/api/events/"):]
-            self.deletes.append(event_id)
-            return 200, b'{"success": true}'
+            return self._delete(path[len("/api/events/"):])
         return 404, b'{"error": "not found"}'
 
 
@@ -177,8 +214,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _serve(self):
         parsed = urllib.parse.urlsplit(self.path)
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length)) if length else None
         status, payload = self.server.fake.handle(
-            self.command, parsed.path, urllib.parse.parse_qs(parsed.query)
+            self.command, parsed.path, urllib.parse.parse_qs(parsed.query), body
         )
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -244,12 +283,12 @@ def check_defaults():
     print("checking scripts/retain.py defaults")
     assert retain.API_BASE == "http://frigate:5000", f"default API base {retain.API_BASE!r}"
     assert retain.POLL_SECONDS == 30, f"default poll interval {retain.POLL_SECONDS!r}s"
-    assert set(retain.REQUIRED_ZONE.values()) == {f"camera_{n}_area" for n in range(1, 5)}, \
+    assert set(retain.REQUIRED_ZONE.values()) == {f"camera_{n}_loitering" for n in range(1, 5)}, \
         f"required zones {sorted(retain.REQUIRED_ZONE.values())}"
     assert retain.TARGET_LABEL == "person", f"target label {retain.TARGET_LABEL!r}"
     assert retain.LOOKBACK_SECONDS == 6 * 3600, \
         f"the lookback must stay the six hours Frigate keeps a snapshot {retain.LOOKBACK_SECONDS}s"
-    print("ok  internal base http://frigate:5000, 30s cadence, four camera_N_area zones, "
+    print("ok  internal base http://frigate:5000, 30s cadence, four camera_N_loitering zones, "
           "one person label, six hour lookback")
 
 
@@ -276,7 +315,7 @@ def check_cursor_shape(fake):
     assert cursors(fake)[0] is None, f"the first page must be uncursored: {fake.reads[0]}"
     expected_floor = retain.after_cutoff()
     for read in fake.reads:
-        assert read["order"] == "desc", f"a page was not start_time DESC: {read}"
+        assert read["sort"] == "date_desc", f"a page was not start_time DESC: {read}"
         assert read["has_snapshot"] == "1" and read["labels"] == "person", f"query {read}"
         assert read.get("after") is not None, f"a page was read with no lookback floor: {read}"
         assert abs(float(read["after"]) - expected_floor) < 5, \
@@ -290,8 +329,8 @@ def check_cursor_shape(fake):
     assert any(size > int(PAGE_SIZE) for size, cursor in zip(page_sizes, cursors(fake))
                if cursor == tied_cursor), \
         f"the tied boundary did not widen the page: {fake.reads}"
-    print(f"ok  no offset sent; every read start_time DESC behind one six hour floor; the 7-row "
-          f"tied group was re-read at the strict cursor with the page widened "
+    print(f"ok  no offset sent; every read start_time DESC (sort=date_desc) behind one six hour "
+          f"floor; the 7-row tied group was re-read at the strict cursor with the page widened "
           f"{PAGE_SIZE} -> {max(page_sizes)}")
 
 
@@ -311,7 +350,7 @@ def check_qualification():
         assert f"{quiet} (HTTP 2xx with no success:true in the reply)" in text, \
             f"success:false was not reported as a refusal:\n{text}"
         assert "6 pinned, 1 already retained" in text, f"pass 1 pin summary:\n{text}"
-        assert "1 without a snapshot, 1 not a person, 1 outside their own zone, " \
+        assert "1 without a snapshot, 1 not a person, 1 outside its own loitering zone, " \
                "1 from no configured camera" in text, f"pass 1 skip counts:\n{text}"
         # 13 of 14 rows: the retained row behind the six hour floor was never read.
         assert "13 unique event(s)" in text, f"the walk read rows it should not have:\n{text}"
@@ -332,11 +371,38 @@ def check_qualification():
         assert second.stdout.count("pinned") == 1, f"pass 2 pinned more than its two retries:\n{text2}"
         assert "2 pinned" in text2 and "7 already retained" in text2, f"pass 2 summary:\n{text2}"
         assert len(fake.posts) == 10, f"{len(fake.posts)} pins in total, expected 8 then 2"
+        assert set(map(json.dumps, fake.post_bodies)) == {'{"retain_indefinitely": true}'}, \
+            f"a pin call carried something other than retain_indefinitely: {fake.post_bodies}"
         assert sorted(fake.pinned) == sorted(qualifying), \
             f"the pinned set {sorted(fake.pinned)} never reached every qualifying event"
         assert fake.deletes == [], f"a delete appeared after two automated passes: {fake.deletes}"
         print("ok  pass 2 pinned exactly the two rows that failed and exited 0, so a refused write "
               "cannot be reported as a completed one")
+        print("ok  every pin carried retain_indefinitely:true and nothing else, so no automated "
+              "pass can un-pin a record an earlier one kept")
+
+
+def check_zone_rule():
+    """Being on camera is not evidence. Only the loitering zone pins."""
+    fake = FakeFrigate(zone_fixture())
+    ordinary, foreign_zone, loitered = ids(fake, [0])[0], ids(fake, [1])[0], ids(fake, [2])[0]
+    with serving(fake) as base:
+        result = run_retain(base, "--once")
+        text = clean(result)
+        assert result.returncode == 0, f"exit {result.returncode}:\n{text}"
+        assert fake.pinned == [loitered], \
+            f"pinned {fake.pinned}, not only the event that loitered in its own zone"
+        assert ordinary not in fake.posts, \
+            "a person who merely entered the ordinary area zone was pinned"
+        assert foreign_zone not in fake.posts, \
+            "an event loitering in another camera's zone was pinned"
+        assert "2 outside its own loitering zone" in text, f"the two skips were not counted:\n{text}"
+        print("ok  a person who entered only camera_N_area is not pinned; the same kind of "
+              "event in camera_N_loitering is, and another camera's loitering zone is not")
+        second = run_retain(base, "--once")
+        assert second.returncode == 0, f"exit {second.returncode}:\n{clean(second)}"
+        assert fake.pinned == [loitered], "the pinned event was pinned a second time"
+        print("ok  a second pass pins nothing again, so a loitering event is pinned once")
 
 
 def check_page_cap():
@@ -404,6 +470,7 @@ def main():
     parser.parse_args()
     check_defaults()
     check_cursor_shape(check_tied_walk())
+    check_zone_rule()
     check_qualification()
     check_page_cap()
     check_cli_positivity()
