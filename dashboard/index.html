@@ -415,14 +415,102 @@
             being kept and does not release any that are already kept. Snapshots saved
             before any of this are left exactly as they were.
           </p>
-          <p>
-            On Cameras 1&ndash;3 an entry that had already started when you armed can be
-            missed, because it has one start time for the whole time somebody was on
-            camera. Camera 4 has no arming moment, so it keeps those too. There is no
-            fighting or behaviour detection here at all.
-          </p>
-        </details>
-      </section>
+<p>
+              On Cameras 1&ndash;3 an entry that had already started when you armed can be
+              missed, because it has one start time for the whole time somebody was on
+              camera. Camera 4 has no arming moment, so it keeps those too.
+            </p>
+            <p>
+              <strong>Arming is not the whole of what keeps a snapshot.</strong> The
+              possible-fighting watch below runs on Cameras 2 and 3 whatever these controls
+              say, and animals stay monitored on Cameras 1&ndash;3 either way. Switching
+              person review off here stops person-presence snapshots, nothing else.
+            </p>
+          </details>
+        </section>
+
+        <section class="section" aria-labelledby="fighting-heading">
+          <div class="section__head">
+            <div>
+              <h2 class="section__title" id="fighting-heading">
+                Possible fighting
+                <span class="badge" title="Experimental: its accuracy has not been measured">
+                  Experimental
+                </span>
+              </h2>
+              <p class="section__lede">
+                A small local model watches these two rooms and keeps any person
+                snapshot it thinks might be two people fighting. It runs continuously
+                and independently of entry arming above, and there is no control for
+                it here. Every snapshot it keeps is one to look at, not a finding.
+              </p>
+            </div>
+          </div>
+
+          <!-- Read-only by construction: a tick and one word per room, and no button.
+               Nothing the browser can send reaches this sidecar. -->
+          <div id="fighting-controls">
+            <div class="toolbar">
+              <span class="feed__status" id="fighting-mode">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span data-fighting-state id="fighting-state"
+                  >Possible fighting &middot; starting</span
+                >
+              </span>
+            </div>
+
+            <div class="toolbar" id="fighting-camera_2">
+              <span class="feed__status">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span data-fighting-state id="fighting-state-camera_2"
+                  >Camera 2 &middot; monitored area 2 &middot; starting</span
+                >
+              </span>
+            </div>
+
+            <div class="toolbar" id="fighting-camera_3">
+              <span class="feed__status">
+                <span class="tick" data-tone="pending" aria-hidden="true"></span>
+                <span data-fighting-state id="fighting-state-camera_3"
+                  >Camera 3 &middot; area_3 &middot; starting</span
+                >
+              </span>
+            </div>
+
+            <p
+              class="result"
+              id="fighting-result"
+              data-tone="pending"
+              role="status"
+              aria-live="polite"
+            ></p>
+          </div>
+
+          <details class="legend">
+            <summary>What this is, and what it is not</summary>
+            <p>
+              <strong>It runs on its own.</strong> It watches the two house cameras
+              whatever Home, Away or Custom says, and arming or disarming person review
+              does not start, stop or change it. There is nothing to switch off here.
+            </p>
+            <p>
+              <strong>It is a possibility, not a finding.</strong> The label reads
+              &ldquo;possible fighting&rdquo; because that is all it is: a score from a
+              small model about sixteen frames. A hug, a game and a fight can look the
+              same to it. <strong>Its accuracy has not been measured on these two
+              rooms</strong>, and the number it compares against is a setting somebody
+              chose rather than a calibrated one. Nothing here identifies anybody,
+              says who started it, or says a weapon was present.
+            </p>
+            <p>
+              <strong>What it keeps.</strong> A snapshot it labels is kept
+              indefinitely like any other kept snapshot, so it will not expire on the
+              six-hour timer and only a person removes it. An ordinary snapshot still
+              expires after six hours. The model weights are provisioned from outside
+              this repository and are never downloaded at runtime.
+            </p>
+          </details>
+        </section>
 
       <section class="section" aria-labelledby="events-heading">
         <div class="section__head">
@@ -444,12 +532,21 @@
             <strong>Restricted area entry</strong> means a person was inside that
             camera&rsquo;s own restricted area - a candidate for review, nothing
             more. <strong>Kept for review</strong> is held until you delete it: a person
-            inside a watched area while that camera is armed, or an animal on sight on the
-            first three cameras. <strong>Previously kept</strong> was held before this rule
+            inside a watched area while that camera is armed, an animal on sight on the
+            first three cameras, or a snapshot the possible-fighting watch labelled.
+            <strong>Previously kept</strong> was held before this rule
             existed and is left exactly as it was. The <strong>Kept for review</strong>
             filter is the camera service&rsquo;s own kept flag and nothing else, so it
             includes the <strong>Previously kept</strong> rows too. In this prototype a
             monitored area is the whole camera frame.
+          </p>
+          <p>
+            <strong>Possible fighting activity</strong> is the experimental watch&rsquo;s
+            own label on that one snapshot, on Camera 2 or Camera 3. It is a
+            <strong>possibility a model reported, not confirmed harm and not a
+            judgement about anybody</strong>. The same snapshot is still only one row you
+            can look at and delete, and the watch has never been measured for accuracy
+            on these two rooms.
           </p>
         </details>
 
@@ -600,10 +697,11 @@
       </form>
     </dialog>
 
-    <!-- The one thing this page asks before it stops keeping people. The same native
-         dialog and the same confirm classes as the deletion above, because it is the
-         same shape of act: a sentence, a scope, two buttons, and no request at all
-         until Confirm. -->
+<!-- The one thing this page asks before it stops keeping people while they are armed.
+     The same native dialog and the same confirm classes as the deletion above, because
+     it is the same shape of act: a sentence, a scope, two buttons, and no request at
+     all until Confirm. The note says what survives, so Home is never read as a total
+     disarm of every kind of keeping. -->
     <dialog
       class="confirm"
       id="entry-confirm"
@@ -611,11 +709,12 @@
       aria-describedby="entry-confirm-scope"
     >
       <form method="dialog" class="confirm__form">
-        <h2 class="confirm__title" id="entry-confirm-title">Stop keeping person snapshots?</h2>
+        <h2 class="confirm__title" id="entry-confirm-title">Stop armed person review?</h2>
         <p class="confirm__scope" id="entry-confirm-scope"></p>
         <p class="confirm__note">
-          Snapshots already kept are untouched, and animals stay monitored on Cameras
-          1&ndash;3 whatever you decide here.
+          Only armed person-presence review stops. Camera 4&rsquo;s area_4 stays armed,
+          animals stay monitored on Cameras 1&ndash;3, and the possible-fighting watch
+          keeps running on Cameras 2 and 3. Snapshots already kept are untouched.
         </p>
         <div class="confirm__actions">
           <button class="btn" type="submit" id="entry-cancel" autofocus>Cancel</button>
@@ -642,6 +741,7 @@
           </p>
           <p class="event__tags">
             <span class="event__flag event__tag" hidden>Restricted area entry</span>
+            <span class="event__fight event__tag" hidden>Possible fighting activity</span>
             <span class="event__kept event__tag">6-hour retention</span>
           </p>
         </div>

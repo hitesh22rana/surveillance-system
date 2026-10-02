@@ -50,6 +50,21 @@
  *     timeout, and a captured id list so nothing that happens while the
  *     confirmation is open can widen what is deleted. The result claims the list
  *     was refreshed only once a fresh read of it has actually landed.
+ *   - The experimental possible-fighting watch is a third read and nothing more. It
+ *     arrives over one exact GET, this page has no control over it, and it cannot
+ *     label, keep, delete or stop anything. Its status is checked field by field
+ *     before any row is allowed to believe it, Monitoring needs a ready model and a
+ *     camera that is analysing with recent data, and the read is fired beside the
+ *     read cycle rather than awaited inside it so it can never hold up the live
+ *     players, the archive or the arming status.
+ *   - "Kept for review" always means retain_indefinitely and nothing else. A row the
+ *     fighting watch labelled and kept is kept, so it reads as kept rather than as
+ *     an inherited record, and that label can never widen what the kept filter
+ *     means.
+ *   - No copy here claims Home or a disarm stops everything. It stops armed
+ *     person-presence review and only that; camera_4, the animal rule and the
+ *     fighting watch are named as continuing wherever a disarm could be read as a
+ *     total stop.
  */
 (() => {
   "use strict";
@@ -87,6 +102,33 @@
   const RESTRICTED_LABEL = "Restricted area entry";
 
   const PERSON_LABEL = "person";
+
+  /* The sub-label word the camera service reports, and only that.
+
+   * Frigate carries it as a bare string or as [label, score]. Both shapes are read
+   * here, and the score is deliberately dropped rather than shown: a number beside a
+   * row would read as a confidence, and it is neither one nor a measured accuracy.
+   * Any other shape is not a sub-label this page understands and yields no word. */
+  const subLabelWord = (event) => {
+    const value = event.sub_label;
+    if (typeof value === "string") return value;
+    if (Array.isArray(value) && value.length === 2 && typeof value[0] === "string") {
+      return value[0];
+    }
+    return "";
+  };
+
+  /* This snapshot is one the experimental watch labelled.
+
+   * Only a person, and only on the two rooms it watches: the label is the camera
+   * service's own record of what was written, so a room outside the watch can never
+   * acquire this chip, and neither can an animal the watch does not label. It is a
+   * possibility a model reported, and the row says so in words rather than claiming
+   * a finding. */
+  const isPossibleFighting = (event) =>
+    event.label === PERSON_LABEL &&
+    FIGHT_CAMERAS.includes(event.camera) &&
+    subLabelWord(event) === FIGHT_SUB_LABEL;
 
   /* The ten COCO 91 animal classes, and the three cameras that watch for them.
    * These mirror config/config.example.yml and scripts/retain.py: the worker pins
@@ -147,6 +189,32 @@
   const REVIEW_FILTERS = Object.freeze(["all", "kept"]);
   const REVIEW_KEPT = "kept";
   const knownReview = (value) => REVIEW_FILTERS.includes(value);
+
+  /* The experimental possible-fighting watch, read over one exact safe route.
+
+   * It is a status read and nothing else. This page cannot arm it, label an event,
+   * keep one, stop it or change a threshold: the proxy route it comes through is a
+   * GET with no body and no action header, and the sidecar behind it publishes no
+   * write at all. The two rooms are the same two the entry place names already give
+   * (ENTRY_PLACE), so there is no second list of places to keep in step.
+
+   * "Kept" still means retain_indefinitely and nothing else. This watch sets that
+   * flag on the snapshots it labels, and reading its label can therefore never widen
+   * what the kept filter means. */
+  const FIGHT_PATH = "/api/activity/fighting";
+  const FIGHT_CAMERAS = Object.freeze(["camera_2", "camera_3"]);
+  const FIGHT_SUB_LABEL = "possible_fighting";
+  const FIGHT_CHIP = "Possible fighting activity";
+  const FIGHT_MODEL_STATES = Object.freeze(["loading", "ready", "refused"]);
+  const FIGHT_CAMERA_STATES = Object.freeze(["warming", "analyzing", "unavailable"]);
+  const FIGHT_MONITORING = "monitoring";
+
+  /* How old the sidecar's own last_capture and last_scored may be, judged against
+   * this browser's clock. The sidecar ages its own fields before answering, and
+   * this is the same limit applied again on the far side of the proxy: a reply that
+   * took a long time to arrive, or a sidecar whose clock has drifted, must not be
+   * able to present an old moment as a current one. */
+  const FIGHT_STALE_MS = 10000;
 
   const POLL_MS = 5000; // status + events
   const TIMEOUT_MS = 4000; // per live request, below the proxy's own timeout
@@ -235,6 +303,8 @@
     entryConfirmCancel: $("entry-cancel"),
     entryConfirmButton: $("entry-confirm-button"),
     entryConfirmLabel: $("entry-confirm-label"),
+    fightingResult: $("fighting-result"),
+    fightingMode: $("fighting-mode"),
     eventTemplate: $("event-item"),
   };
 
@@ -268,6 +338,15 @@
       notice: "",
       mode: "home", // home | away | custom, as the worker derived it
       state: {}, // camera -> {ready, armed, armedSince}
+    },
+    /* The experimental fighting watch, read from its own status route and never
+     * assumed: no optimistic state, so a refused reply and a sidecar that is simply
+     * absent both leave the rows saying so rather than showing the last answer as
+     * though it were still true. */
+    fighting: {
+      read: false,
+      failed: false,
+      status: null, // the parsed status, or null when the last read did not hold
     },
   };
 
@@ -412,13 +491,17 @@
    * row expires after the six hours the camera service keeps it. A row held
    * because a person was inside that camera's watched area while its monitoring
    * was armed is held for review. So is a row held because an animal was seen on
-   * a camera that watches for them. A person row that is held with neither is a
-   * record from before this rule, and says so rather than claiming it is a
-   * current risk: the word follows the flag the service actually reports, never
-   * the zone on its own. */
+   * a camera that watches for them, and so is one the experimental watch labelled
+   * and kept: whatever put the flag there, the row is held for a person to look at
+   * and must not read as an inherited record just because entry arming had nothing
+   * to do with it. A person row that is held with none of those is a record from
+   * before this rule, and says so rather than claiming it is a current risk: the
+   * word follows the flag the service actually reports, never the zone on its own. */
   function retentionText(event) {
     if (!isKept(event)) return "6-hour retention";
-    return inWatchedZone(event) || isAnimal(event) ? "Kept for review" : "Previously kept";
+    return inWatchedZone(event) || isAnimal(event) || isPossibleFighting(event)
+      ? "Kept for review"
+      : "Previously kept";
   }
 
   /* A count the service reported, accepted only when it is already a whole
@@ -1171,6 +1254,14 @@
       const flag = node.querySelector(".event__flag");
       setShown(flag, inRestrictedZone(event));
       if (inRestrictedZone(event)) flag.textContent = RESTRICTED_LABEL;
+      // The experimental watch's own label on this one snapshot. It is read from the
+      // row's own sub-label and never inferred from the camera, the zone or the
+      // armed state, and the kept word below is read separately from it: this chip
+      // cannot widen what "Kept for review" means, which is still the flag alone.
+      const fight = node.querySelector(".event__fight");
+      const fighting = isPossibleFighting(event);
+      setShown(fight, fighting);
+      if (fighting) fight.textContent = FIGHT_CHIP;
       node.querySelector(".event__kept").textContent = retentionText(event);
 
       el.events.appendChild(node);
@@ -1320,13 +1411,19 @@
     // than to the picture the operator just opened.
     shotOpener = anchor;
 
-    // The caption says the two facts that identify the row, read off that row.
+    // The caption says the facts that identify the row, read off that row. The
+    // experimental chip is read out of the row too rather than rebuilt here, so the
+    // larger picture carries exactly what the row claimed and cannot claim more.
     const row = anchor.closest(".event");
     const camera = row ? row.querySelector(".event__camera") : null;
     const time = row ? row.querySelector(".event__time") : null;
+    const fight = row ? row.querySelector(".event__fight") : null;
     const label = camera ? camera.textContent : "Snapshot";
     const at = time ? time.textContent : "";
-    el.shotCaption.textContent = at ? label + " · " + at : label;
+    const flagged = fight && !fight.hidden ? " · " + fight.textContent : "";
+    el.shotCaption.textContent = at
+      ? label + flagged + " · " + at
+      : label + flagged;
 
     const token = ++shotToken;
     el.shotStage.dataset.state = "loading";
@@ -1636,7 +1733,9 @@
     if (applied !== null) applyEntry(applied);
     const said = entryOutcomeText(body);
     if (failure === null) {
-      showEntryOutcome("ok", said + " Snapshots already kept are untouched.");
+      showEntryOutcome("ok", said + " Snapshots already kept are untouched, and what keeps " +
+        "running did not change: " + ALWAYS_CAMERA + "'s area_4, animals on Cameras 1–3, " +
+        "and the possible-fighting watch on Cameras 2 and 3.");
     } else if (applied !== null) {
       showEntryOutcome(
         "warn",
@@ -1657,12 +1756,14 @@
   /* What the operator asked for, in words. Named before the request is sent and used
    * only once the service has confirmed it, so it can never stand in for an answer.
    * It says what is being kept - a person inside a watched area - and never anything
-   * about who, which way, or what it meant. */
+   * about who, which way, or what it meant. "Person review" here always means the
+   * armed person-presence rule and nothing else: the words below name what keeps
+   * running, because "disarmed" is not a total stop and must never read as one. */
   function entryOutcomeText(body) {
     if (!body.camera) {
       return body.mode === "away"
-        ? "Person review armed on Cameras 1–3: Camera 1 its monitored area 1, Cameras 2 and 3 anyone in view."
-        : "Person review disarmed on Cameras 1–3.";
+        ? "Armed person review on Cameras 1–3: Camera 1 its monitored area 1, Cameras 2 and 3 anyone in view."
+        : "Armed person review off on Cameras 1–3.";
     }
     const what = body.camera === "camera_1" ? "its monitored area 1" : "anyone in view";
     return cameraLabel(body.camera) +
@@ -1809,8 +1910,19 @@
   }
 
   /* What the confirmation would send, captured whole when it opens: a poll, a filter
-   * change or another click while the dialog is open cannot change it. */
+   * change or another click while the dialog is open cannot change it.
+
+   * The scope sentence names exactly what stops and, just as importantly, what does
+   * not. Home turns off armed person-presence review on cameras 1-3; it does not turn
+   * off camera_4, the animal rule, or the experimental fighting watch, and a dialog
+   * that implied otherwise would be the most expensive kind of wrong on this page. */
   let entryIntent = null;
+
+  /* Stated once and used in both scopes, so the two can never drift apart and the
+   * confirmations cannot disagree with each other. */
+  const STILL_RUNNING =
+    "Camera 4 stays armed, animals stay monitored on Cameras 1–3, and the " +
+    "possible-fighting watch keeps running on Cameras 2 and 3.";
 
   function openEntryConfirm(body) {
     // Never stacked on an open one, and never re-entered from its own Confirm.
@@ -1821,13 +1933,15 @@
       ? "Switch to Home?"
       : "Disarm " + cameraLabel(body.camera) + "?";
     el.entryConfirmScope.textContent = whole
-      ? "Away is active. Home stops person review on Cameras 1–3. Camera 4 remains armed."
+      ? "Away is active. Home stops armed person-presence review on Cameras 1–3. " +
+        STILL_RUNNING
       : "Away is active. Disarming " +
         cameraLabel(body.camera) +
         " (" +
         ENTRY_PLACE[body.camera] +
-        ") reduces person monitoring on Cameras 1–3 and the mode becomes Custom. " +
-        "Camera 4 remains armed.";
+        ") stops that camera's armed person-presence review and the mode becomes " +
+        "Custom. " +
+        STILL_RUNNING;
     el.entryConfirmLabel.textContent = whole ? "Switch to Home" : "Disarm";
     el.entryConfirmButton.disabled = false;
     el.entryConfirmCancel.disabled = false;
@@ -1888,6 +2002,253 @@
 
   el.entryConfirmButton.addEventListener("click", confirmEntry);
   el.entryConfirm.addEventListener("close", closeEntryConfirm);
+
+  /* ------------------------------------------------------------ fighting -- */
+
+  /* What the experimental watch is doing, read over one safe GET.
+
+   * It is the only part of this page that is not about a camera's live picture or
+   * the archive, and it is deliberately the least assertive thing here: two words
+   * per camera, a tick, and one line saying why when it is not running. There is no
+   * control, because there is nothing this page is allowed to do to it.
+   *
+   * Monitoring is earned and it is narrow. All of these must hold at once: the model
+   * is ready, that camera's state is analysing, and its last capture and last score
+   * are both recent by this browser's own clock. A model still loading its weights,
+   * a model that refused, a camera with no frames arriving, a camera the sidecar
+   * calls unavailable, and an answer that has simply stopped arriving all fail
+   * closed - none of them can be talked into Monitoring, and a stale timestamp is
+   * treated as no timestamp rather than as a current one.
+   *
+   * This must never cost anything else on the page. The four live players, the
+   * archive and the arming status are the ones that matter, so this read is fired
+   * and never awaited inside the cycle below: a sidecar that is loading a several
+   * hundred megabyte model, slow, or absent cannot delay any of them by a cycle. */
+
+  /* A moment the sidecar reported, or null for none. Not "recent": how old it is has
+   * to be judged against this browser's clock, because a sidecar's own clock is a
+   * different process's claim and not this page's evidence. */
+  const isMoment = (value) =>
+    value === null ||
+    (typeof value === "number" && Number.isFinite(value) && value > 0);
+  const asMoment = (value) => (typeof value === "number" ? value : null);
+
+  /* A two-class score in [0, 1], or null. Checked rather than displayed: the point of
+   * the check is that a number this page could not read cannot end up on a row. */
+  const isScore = (value) =>
+    value === null ||
+    (typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1);
+  const asScore = (value) => (typeof value === "number" ? value : null);
+
+  /* What this page needs out of a status, or null.
+
+   * Every core field is required and typed, and anything that fails is a status this
+   * page does not have: shown as unavailable rather than filled in with a guess. New
+   * keys are ignored, because a sidecar may carry more metadata than the page needs
+   * and refusing a whole answer over an extra field would be its own kind of wrong.
+   * What is not tolerated is a missing or malformed core field, a camera set that is
+   * not exactly the two watched, or a state word this page does not know - an
+   * unrecognised state must fail closed rather than fall through to Monitoring.
+   *
+   * The threshold, the window length, the frame rate, the vote count and the cooldown
+   * are therefore checked and then deliberately **not** carried into anything this page
+   * renders. A 0.9 printed beside a camera would read as a confidence or an accuracy,
+   * and this page has neither; what the operator is shown is words, in the collapsed
+   * explanation beside the rows.
+   */
+  function usableFighting(payload) {
+    if (!isObject(payload)) return null;
+    if (payload.experimental !== true) return null;
+    if (payload.label !== FIGHT_SUB_LABEL) return null;
+    if (!FIGHT_MODEL_STATES.includes(payload.model_state)) return null;
+    const threshold = numberOrNull(payload.threshold);
+    const fps = numberOrNull(payload.capture_fps);
+    const cooldown = numberOrNull(payload.cooldown_seconds);
+    const windowFrames = wholeCount(payload.window_frames);
+    const votes = wholeCount(payload.votes_required);
+    const pending = wholeCount(payload.pending);
+    if (threshold === null || threshold <= 0 || threshold > 1) return null;
+    if (fps === null || fps <= 0) return null;
+    if (cooldown === null || cooldown < 0) return null;
+    if (windowFrames === null || windowFrames < 1) return null;
+    if (votes === null || votes < 1) return null;
+    if (pending === null) return null;
+    const cameras = payload.cameras;
+    if (!isObject(cameras) || Object.keys(cameras).length !== FIGHT_CAMERAS.length) return null;
+    const rows = {};
+    for (const camera of FIGHT_CAMERAS) {
+      const row = cameras[camera];
+      if (!isObject(row)) return null;
+      if (!FIGHT_CAMERA_STATES.includes(row.state)) return null;
+      if (!isMoment(row.last_capture) || !isMoment(row.last_scored)) return null;
+      if (!isScore(row.score)) return null;
+      rows[camera] = {
+        state: row.state,
+        lastCapture: asMoment(row.last_capture),
+        lastScored: asMoment(row.last_scored),
+        // Carried, and never printed. A camera that says it is analysing has to have
+        // something to have analysed: a null score here is a row claiming to be watched
+        // on no evidence at all, and fightingNow below refuses it.
+        score: asScore(row.score),
+      };
+    }
+    return {
+      modelState: payload.model_state,
+      pending: pending,
+      cameras: rows,
+    };
+  }
+
+  /* The age of a moment the sidecar reported, in seconds, or null when it is not one
+   * this page will act on.
+
+   * Two failures share that null, and both have to. A moment older than the window is
+   * stale, and a moment **ahead** of this browser's clock is not evidence of anything
+   * having just happened either: this browser and the sidecar do not share a clock,
+   * and a number that has not occurred yet must never be counted as recent. Both are
+   * treated as no moment at all rather than as a current one.
+   */
+  function momentAge(moment) {
+    if (moment === null || typeof moment !== "number" || !Number.isFinite(moment)) {
+      return null;
+    }
+    const age = Date.now() / 1000 - moment;
+    return Number.isFinite(age) && age >= 0 && age <= FIGHT_STALE_MS / 1000 ? age : null;
+  }
+
+  /* True only when this camera is demonstrably being watched right now.
+
+   * Four things have to hold at once, and the score is one of them. A ready model, an
+   * analysing camera and recent frames and a recent score all describe the same thing
+   * from three sides; a **null score** describes none of it, and a row that claims to
+   * be analysing while carrying no score has nothing behind the claim. So a null or
+   * unreadable score is refused here even though it is a legal value to receive.
+   */
+  function fightingNow(row, modelState) {
+    if (modelState !== "ready" || row.state !== "analyzing") return false;
+    if (typeof row.score !== "number" || !Number.isFinite(row.score) ||
+        row.score < 0 || row.score > 1) {
+      return false;
+    }
+    return momentAge(row.lastCapture) !== null && momentAge(row.lastScored) !== null;
+  }
+
+  /* One camera's row: a tick and one of three words an operator can act on.
+
+   * Monitoring is the earned one. Starting means frames are genuinely arriving and the
+   * model is working through its first window - so a warm row whose frames have gone
+   * stale is Unavailable, not Starting, because Starting promises something is on its
+   * way and nothing says it is. Unavailable is everything else, including a model that
+   * will not load: the reason belongs in the collapsed explanation, not beside a camera,
+   * and no word here is a claim about anything having happened in the room. */
+  function fightingCameraRow(camera) {
+    const where = cameraLabel(camera) + " · " + ENTRY_PLACE[camera];
+    const status = state.fighting.status;
+    if (!status) {
+      // Before the first answer that is Starting, and after a failed read it is
+      // Unavailable: one is still worth waiting out, the other has stopped arriving.
+      return state.fighting.failed
+        ? { tone: "bad", text: where + " · unavailable" }
+        : { tone: "pending", text: where + " · starting" };
+    }
+    const row = status.cameras[camera];
+    if (fightingNow(row, status.modelState)) {
+      return { tone: "ok", text: where + " · " + FIGHT_MONITORING };
+    }
+    if (status.modelState === "ready" && row.state === "warming" &&
+        momentAge(row.lastCapture) !== null) {
+      return { tone: "pending", text: where + " · starting" };
+    }
+    return { tone: "bad", text: where + " · unavailable" };
+  }
+
+  function fightingTone() {
+    const status = state.fighting.status;
+    if (!status) return state.fighting.failed ? "bad" : "pending";
+    if (status.modelState === "refused") return "bad";
+    if (status.modelState !== "ready") return "pending";
+    const rows = FIGHT_CAMERAS.map((camera) => fightingCameraRow(camera));
+    if (rows.some((row) => row.tone === "ok")) return "ok";
+    if (rows.some((row) => row.tone === "bad")) return "bad";
+    return "pending";
+  }
+
+  /* One read, settled either way and never thrown. A status this page does not have is
+   * a status it does not keep: the last answer is dropped rather than left on screen,
+   * so a sidecar that has just died reads as unavailable and not as the last thing it
+   * said. The failure flag is set from the same answer, so a sidecar that comes back
+   * stops being announced on its own.
+   *
+   * The renderer is guarded separately, so a surprise in the DOM cannot reject this
+   * and leave the in-flight flag set for good. */
+  async function readFighting() {
+    let parsed = null;
+    try {
+      parsed = usableFighting(await fetchJSON(FIGHT_PATH, TIMEOUT_MS));
+    } catch (err) {
+      parsed = null;
+    }
+    state.fighting.status = parsed;
+    state.fighting.read = parsed !== null;
+    state.fighting.failed = parsed === null;
+    try {
+      renderFighting();
+    } catch (err) {
+      // Nothing on this page is worth breaking a live view over.
+    }
+  }
+
+  function showFightingOutcome(tone, text) {
+    if (!el.fightingResult) return;
+    el.fightingResult.dataset.tone = tone;
+    el.fightingResult.textContent = text;
+  }
+
+  /* One line above the two rows, and only two things on it: what the watch is for,
+   * which is fixed, and how many rooms are earning the word Monitoring, which is
+   * counted here from the same test the rows use. A ready model alone never counts a
+   * room, so this cannot claim two while both are stale. */
+  function fightingHeadline() {
+    const status = state.fighting.status;
+    if (!status) {
+      return state.fighting.failed
+        ? "Possible fighting · status unavailable"
+        : "Possible fighting · starting";
+    }
+    const watching = FIGHT_CAMERAS.filter((camera) =>
+      fightingNow(status.cameras[camera], status.modelState)
+    ).length;
+    return (
+      "Possible fighting · continuous on Cameras 2 and 3 · " +
+      watching +
+      " of " +
+      FIGHT_CAMERAS.length +
+      " monitoring"
+    );
+  }
+
+  function renderFighting() {
+    const node = $("fighting-state");
+    if (node) node.textContent = fightingHeadline();
+    const label = $("fighting-mode");
+    if (label) setTick(label.querySelector(".tick"), fightingTone());
+    for (const camera of FIGHT_CAMERAS) {
+      const row = $("fighting-" + camera);
+      if (!row) continue;
+      const view = fightingCameraRow(camera);
+      setTick(row.querySelector(".tick"), view.tone);
+      const text = row.querySelector("[data-fighting-state]");
+      if (text) text.textContent = view.text;
+    }
+    // One sentence, and no more: what failed is this one read, not the cameras and not
+    // the archive, and a status nobody can read is not worth a paragraph.
+    showFightingOutcome(
+      state.fighting.failed ? "warn" : "pending",
+      state.fighting.failed
+        ? "Fighting monitoring status is unavailable."
+        : ""
+    );
+  }
 
   /* ------------------------------------------------------------- deletes -- */
 
@@ -2487,6 +2848,7 @@
     renderCards();
     renderStrip();
     renderEntry();
+    renderFighting();
     renderNotice();
     renderEvents();
   }
@@ -2509,6 +2871,24 @@
     }, delay);
   }
 
+  /* The experimental watch rides the same cycle and is deliberately not awaited
+   * into it. One read is ever in flight, it settles its own rendering when it lands,
+   * and its completion is never on the critical path of anything else: four live
+   * players, the archive and the arming status do not wait on a sidecar that may be
+   * loading a model, slow, or not deployed at all. */
+  let fightingReading = false;
+
+  function pollFighting() {
+    if (fightingReading) return;
+    fightingReading = true;
+    const done = () => {
+      fightingReading = false;
+    };
+    // Both handlers, so the in-flight flag is released however this settles. It never
+    // rejects, and the second is here so that could not become a silent freeze.
+    readFighting().then(done, done);
+  }
+
   async function poll() {
     if (!running || document.hidden) return;
     // A read started before the last stop() may still be settling; let it
@@ -2526,7 +2906,10 @@
        * the live pictures are unaffected either way.
        *
        * The entry status rides the same loop and the same Promise.all: no second
-       * timer, and a tab that is hidden stops reading both. */
+       * timer, and a tab that is hidden stops reading both. The possible-fighting
+       * status is fired beside them and is not awaited, so it cannot hold this
+       * cycle open for anything else. */
+      pollFighting();
       await Promise.all([
         readStats(),
         readEntry(),

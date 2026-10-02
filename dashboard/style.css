@@ -687,6 +687,25 @@ a {
   background: var(--accent);
 }
 
+/* The experimental marker, sitting inside the section title.
+
+ * Not a filled badge: the whole section is experimental, so a bright chip beside the
+ * heading would be louder than the thing it qualifies. Warn tone rather than bad,
+ * because nothing here is a failure, and the word carries the meaning rather than the
+ * colour. One inline-block, so it never wraps away from the title it belongs to. */
+.badge {
+  display: inline-block;
+  margin-inline-start: var(--space-2xs);
+  padding: 2px var(--space-2xs);
+  border: 1px solid var(--rule-2);
+  border-radius: var(--radius-pill);
+  color: var(--tone-warn);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
 /* ---------------------------------------------------------------- legend --- */
 
 .legend {
@@ -973,6 +992,16 @@ a {
 
 .event__tag {
   overflow-wrap: anywhere;
+}
+
+/* The experimental watch's own label, in the warn tone and no other.
+
+ * A row carries at most one of these, and it is a possibility a model reported, so
+ * it is drawn as text in the existing tag row rather than as a badge: fifty rows of
+ * filled chips would claim every page is full of alerts, and the bad tone would claim
+ * something this has never measured. The full stop belongs to a person looking. */
+.event__fight {
+  color: var(--tone-warn);
 }
 
 .event__tags > * + *::before {

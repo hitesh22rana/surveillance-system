@@ -55,6 +55,11 @@ DENIED = ("/api/config/raw", "/api/stats/history", "/api/logs", "/api/restart", 
           # not be reachable from a browser.
           "/api/snapshots", "/api/snapshots/", "/api/snapshots/unknown",
           "/api/snapshots/events/1",
+          # The experimental fighting sidecar is reachable on ONE exact path. Its own
+          # /status, any sub-path of it, any sibling under /api/activity and the
+          # bare directory must all stay out of the browser's reach.
+          "/api/activity", "/api/activity/", "/api/activity/fighting/status",
+          "/api/activity/fighting/1", "/api/activity/other", "/api/activity/unknown",
           # go2rtc's own surface: the proxy pins one script and four live paths, so
           # its config, its stream list, its control WebSocket and any other camera
           # must all be unreachable from here.
@@ -71,6 +76,24 @@ EVENT_ID = re.compile(r"^[0-9]+(\.[0-9]+)?-[a-z0-9]{6}$")  # native id, not the 
 SUMMARY_PATH = "/api/snapshots/summary"
 EVENTS_PATH = "/api/snapshots/events"
 DELETE_PATH = "/api/snapshots/delete"
+ACTIVITY_PATH = "/api/activity/fighting"
+# The experimental fighting sidecar's own read, as its status document describes it.
+# The core shape is restated here and deliberately not taken from the sidecar's own
+# module: this is a contract between two services, and agreeing with whatever the
+# sidecar happens to say today would prove nothing about the proxy in front of it.
+FIGHT_LABEL = "possible_fighting"
+FIGHT_CAMERAS = ("camera_2", "camera_3")
+FIGHT_MODEL_STATES = ("loading", "ready", "refused")
+FIGHT_CAMERA_STATES = ("warming", "analyzing", "unavailable")
+# The sidecar's own staleness window. Re-applied here against this host's clock so a
+# slow answer cannot present an old moment as a current one.
+FIGHT_STALE_S = 10
+# Nothing in the status document may be one of these. A path to a model or a state
+# file, a media URL, a frame, a credential or the sidecar's own address are all
+# things this read exists not to carry.
+FIGHT_FORBIDDEN = ("rtsp://", "cmdline", "cpu_usages", "/models", "/state", "fighting:8091",
+                   "/media/frigate", "latest.jpg", "snapshot.jpg", "CREDENTIAL", "password",
+                   "safetensors", "torch")
 # The page the worker returns, whatever is asked for. This is the bound that makes
 # the forwarded query string safe: the widest read anyone can ask for is one page.
 PAGE_SIZE = 25
@@ -106,11 +129,13 @@ def get(base, path, method="GET", body=None, headers=None):
         return err.code, {k.lower(): v for k, v in (err.headers or {}).items()}, err.read()
 
 
-def delete_request(base, payload, headers=None):
-    """A POST to the delete path. An empty header value is how urllib says do not send it."""
+def delete_request(base, payload, headers=None, query=""):
+    """A POST to the delete path, optionally carrying a query string. An empty header
+    value is how urllib says do not send it."""
     sent = {"Content-Type": "application/json", "X-Surveillance-Action": "delete"}
     sent.update(headers or {})
-    return get(base, DELETE_PATH, method="POST", body=json.dumps(payload).encode(), headers=sent)
+    return get(base, DELETE_PATH + query, method="POST",
+               body=json.dumps(payload).encode(), headers=sent)
 
 
 def main():
@@ -136,8 +161,8 @@ def main():
     # against the live server a few lines below, so an allowed read that drifted
     # into that list would fail there - this names that requirement instead of
     # leaving it to a future editor to rediscover.
-    assert not {SUMMARY_PATH, EVENTS_PATH} & set(DENIED), \
-        "an allowed snapshot read is in the deny list"
+    assert not {SUMMARY_PATH, EVENTS_PATH, ACTIVITY_PATH} & set(DENIED), \
+        "an allowed snapshot or activity read is in the deny list"
     for path in DENIED:
         status, _h, _b = get(base, path)
         assert status in (403, 404, 405), f"{path}: HTTP {status}, expected a denial"
@@ -247,6 +272,7 @@ def main():
           "browser, and it is recorded there, not proved by this run")
     check_summary(base)
     check_events(base)
+    check_activity(base)
     check_delete_guards(base)
     print("\nPASS  every assertion held")
     return 0
@@ -333,6 +359,23 @@ def check_events(base):
     print(f"ok  {EVENTS_PATH} 200: {len(events)} of {total} rows on page 1 of a fixed {PAGE_SIZE}-row page, "
           f"and all {len(CAMERAS)} camera filters returned only their own rows")
 
+    # The review scope. The kept view is the camera service's own retained flag and
+    # nothing else, so every row on it has to carry that flag, it can never be wider
+    # than the unfiltered read, and a repeated or unrecognised value is a refusal
+    # rather than a second answer.
+    status, _h, body = get(base, f"{EVENTS_PATH}?page=1&review=kept")
+    assert status == 200, f"{EVENTS_PATH}?page=1&review=kept: HTTP {status}"
+    kept_events, kept_total = read_page("review=kept", json.loads(body.decode("utf-8", "replace")))
+    unflagged = [e["id"] for e in kept_events if e.get("retain_indefinitely") not in (True, 1)]
+    assert not unflagged, f"review=kept returned {len(unflagged)} row(s) without the flag: {unflagged[:3]}"
+    assert kept_total <= total, f"review=kept total {kept_total} is above the unfiltered total {total}"
+    for query in ("page=1&review=all&review=kept", "page=1&review=flagged", "page=1&review="):
+        status, _h, _b = get(base, f"{EVENTS_PATH}?{query}")
+        assert status == 400, f"{EVENTS_PATH}?{query}: HTTP {status}, expected 400"
+    print(f"ok  {EVENTS_PATH}?review=kept: {kept_total} row(s), every one of the "
+          f"{len(kept_events)} on page 1 flagged retained, never above the unfiltered total; "
+          f"a repeated, unknown or blank review value is 400")
+
     # What the gateway refuses rather than serves: a camera that is not one of the
     # four, an argument it does not define, and an attempt to widen the page. A
     # refusal here is a validation decision, so it must be the 400 and not a 200
@@ -349,6 +392,113 @@ def check_events(base):
         assert status == 405, f"{method} {EVENTS_PATH}: HTTP {status}, expected 405"
     print(f"ok  {EVENTS_PATH} refuses POST, PUT, PATCH and DELETE with 405, and answers 400 for a camera "
           f"outside the four, an undefined argument, and an attempt to widen the page")
+
+
+def check_activity(base):
+    """The experimental fighting status: one exact read, and only the safe shape.
+
+    Every request here is a GET or a refused write attempt, so nothing in this
+    function can label an event, keep one, delete one or change any setting. What it
+    asserts is the proxy contract between two services: one exact path answers, the
+    core shape is present and typed, no client query is forwarded, every other
+    /api/activity path is refused, no method but GET and HEAD is accepted, and the
+    body carries no path, credential, media URL or frame.
+
+    The model state is reported and never assumed. A sidecar whose model is loading
+    or refused is a valid answer to a valid question, so it is printed as NOT READY
+    and never counted as a working watch; a route that cannot be read at all is a
+    failure, because this path is part of the deployed config and 502 or 404 there
+    means something is genuinely wrong.
+    """
+    status, headers, body = get(base, ACTIVITY_PATH)
+    assert status == 200, f"{ACTIVITY_PATH}: HTTP {status}, expected the sidecar's status"
+    assert "application/json" in headers.get("content-type", "").lower(), \
+        f"{ACTIVITY_PATH} content-type {headers.get('content-type')!r}"
+    assert "access-control-allow-origin" not in headers, \
+        f"{ACTIVITY_PATH} answered a CORS header: {sorted(headers)}"
+    text = body.decode("utf-8", "replace")
+    for leak in FIGHT_FORBIDDEN:
+        assert leak not in text, f"{leak!r} reached the fighting status: {text[:400]}"
+    payload = json.loads(text)
+    assert isinstance(payload, dict), f"{ACTIVITY_PATH}: {type(payload).__name__}, expected an object"
+    assert payload.get("experimental") is True, \
+        f"{ACTIVITY_PATH} is not marked experimental: {payload.get('experimental')!r}"
+    assert payload.get("label") == FIGHT_LABEL, \
+        f"{ACTIVITY_PATH} label is {payload.get('label')!r}, expected {FIGHT_LABEL!r}"
+    model_state = payload.get("model_state")
+    assert model_state in FIGHT_MODEL_STATES, f"unknown model_state {model_state!r}"
+    threshold = payload.get("threshold")
+    assert isinstance(threshold, (int, float)) and not isinstance(threshold, bool) \
+        and 0 < threshold <= 1, f"threshold {threshold!r} is not above 0 and at most 1"
+    for name in ("window_frames", "votes_required"):
+        value = payload.get(name)
+        assert isinstance(value, int) and not isinstance(value, bool) and value >= 1, \
+            f"{name} {value!r}, expected a positive integer"
+    for name in ("capture_fps", "cooldown_seconds"):
+        value = payload.get(name)
+        assert isinstance(value, (int, float)) and not isinstance(value, bool) \
+            and value >= 0, f"{name} {value!r}, expected a non-negative number"
+    pending = payload.get("pending")
+    assert isinstance(pending, int) and not isinstance(pending, bool) and pending >= 0, \
+        f"pending {pending!r}, expected a non-negative count"
+    cameras = payload.get("cameras")
+    assert isinstance(cameras, dict) and set(cameras) == set(FIGHT_CAMERAS), \
+        f"cameras must be exactly {list(FIGHT_CAMERAS)}, got {cameras!r}"
+
+    # What is reported as being watched right now, judged here and not taken on trust:
+    # a ready model, a camera analysing, and a score recent by this host's clock.
+    now = time.time()
+    monitoring = []
+    for camera in FIGHT_CAMERAS:
+        row = cameras[camera]
+        assert isinstance(row, dict), f"{camera} row is {type(row).__name__}, expected an object"
+        assert row.get("state") in FIGHT_CAMERA_STATES, \
+            f"{camera} state {row.get('state')!r} is not one of {FIGHT_CAMERA_STATES}"
+        for name in ("last_capture", "last_scored"):
+            value = row.get(name)
+            assert value is None or (isinstance(value, (int, float))
+                                     and not isinstance(value, bool) and value > 0), \
+                f"{camera} {name} {value!r}, expected a timestamp or null"
+        score = row.get("score")
+        assert score is None or (isinstance(score, (int, float)) and not isinstance(score, bool)
+                                 and 0 <= score <= 1), \
+            f"{camera} score {score!r} is not in [0, 1] or null"
+        scored = row.get("last_scored")
+        if model_state == "ready" and row["state"] == "analyzing" \
+                and isinstance(scored, (int, float)) and now - scored <= FIGHT_STALE_S:
+            monitoring.append(camera)
+
+    # No client query is forwarded, and none is silently dropped either: a variable
+    # proxy_pass replaces the request URI and does not re-append the arguments, so
+    # without the guard these would vanish and read as though they had been honoured.
+    for query in ("camera=camera_2", "review=kept", "limit=500", "1", "a=b&c=d"):
+        status, _h, _b = get(base, f"{ACTIVITY_PATH}?{query}")
+        assert status == 400, f"{ACTIVITY_PATH}?{query}: HTTP {status}, expected 400"
+    # A read is still a read, on the one path that is allowed to answer.
+    for method in ("POST", "PUT", "PATCH", "DELETE", "OPTIONS"):
+        status, _h, _b = get(base, ACTIVITY_PATH, method=method)
+        assert status == 405, f"{method} {ACTIVITY_PATH}: HTTP {status}, expected 405"
+    print(f"ok  {ACTIVITY_PATH} 200: experimental, label {FIGHT_LABEL}, model {model_state}, "
+          f"threshold {threshold:g} (a chosen number, not an accuracy), "
+          f"{payload['window_frames']} frames at {payload['capture_fps']:g} fps, "
+          f"{payload['votes_required']} votes required, {pending} pending interval(s), "
+          f"cameras exactly {list(FIGHT_CAMERAS)}")
+    print(f"ok  {ACTIVITY_PATH} carries no path, credential, media URL or frame; "
+          f"{len(FIGHT_FORBIDDEN)} markers checked")
+    print(f"ok  {ACTIVITY_PATH} answers 400 for five query strings and 405 for POST, PUT, "
+          f"PATCH, DELETE and OPTIONS")
+
+    # Honest about the model rather than assuming it: a refused or still-loading model
+    # is reported as not ready, so a passing run can never be read as a working watch.
+    if model_state != "ready":
+        print(f"NOT READY  the model is {model_state}: nothing is being scored or labelled "
+              f"right now. The proxy contract above held; that is not a working model and "
+              f"no accuracy is implied.")
+    elif not monitoring:
+        print("NOT READY  the model is ready but neither room is reported as being monitored: "
+              f"no camera is analysing with a score inside {FIGHT_STALE_S}s")
+    else:
+        print(f"ok  {model_state} model, and {', '.join(monitoring)} reported as monitoring now")
 
 
 def check_delete_guards(base):
@@ -384,6 +534,26 @@ def check_delete_guards(base):
     print(f"ok  {len(refusals)} refused delete requests, none of which could delete anything: a "
           f"foreign origin, no action header, a text content type, two ids that are not tracker "
           f"ids, an empty scope, and a scope the contract does not define")
+
+    # A query on the write is refused rather than dropped. The proxy_pass for this
+    # location is a variable plus a fixed URI, which replaces the request URI and does
+    # NOT re-append the client's arguments, so without the guard these would vanish
+    # and read as though they had been honoured - the outcome found on the live root
+    # for the arming route. The body is the same well-formed one used above, carrying
+    # the impossible PROBE_ID, so nothing could be deleted even if it were honoured.
+    # The 400 here is nginx's own refusal, which is the point: the argument never
+    # reaches the worker to be interpreted.
+    for query in ("review=kept", "camera=camera_2", "all=true", "1"):
+        status, _h, _b = delete_request(base, {"ids": [PROBE_ID]}, query=f"?{query}")
+        assert status == 400, f"delete carrying {query}: HTTP {status}, expected 400"
+    # The same request without the argument is not refused for that reason: it is
+    # refused for the missing Origin, which is a different guard and a different
+    # status. Together the two say the query is refused in its own right.
+    status, _h, _b = delete_request(base, {"ids": [PROBE_ID]})
+    assert status == 403, f"unqueried delete with no Origin: HTTP {status}, expected 403"
+    print(f"ok  {DELETE_PATH} answers 400 for four query strings, so an argument can never "
+          f"silently narrow or widen a deletion; the same body with no argument is refused "
+          f"403 for its missing Origin, which is a different guard")
 
 
 if __name__ == "__main__":
