@@ -20,6 +20,23 @@ a prompt. Use Frigate's existing zones, tracking, and snapshots before custom ML
 or notification services. Record live validation separately from static checks,
 and never report a pass that was not actually observed.
 
-The dashboard is read-only by construction. Keep it that way: the proxy pins the
-upstream stats key allowlist server-side, no credential, log, config, or restart
-path is reachable from the browser, and both published ports stay on loopback.
+The dashboard is read-only by construction, with one authorised exception the
+owner asked for: controlled manual deletion of reviewed snapshots. Keep everything
+else that way. The proxy still pins the upstream stats key allowlist server-side,
+and no credential, log, config or restart path is reachable from the browser. The
+only write path in this repository is `scripts/retain.py --serve` answering
+`POST /api/snapshots/delete`, it is irreversible, and it stays behind its own
+refusals: the dashboard's exact Host, an Origin equal to that Host, a JSON content
+type, `X-Surveillance-Action: delete`, and a body validated before any upstream
+request. Both published ports stay on loopback, and the gateway publishes no port
+at all — nginx reaches it on the internal network only. Deletion is never
+automatic: the poll loop contains no `DELETE` and never will.
+
+Destructive validation is allowed when the owner authorises it explicitly, which
+he did on 2026-10-02 for one experimental snapshot; the earlier blanket
+never-agent-deletes rule is withdrawn. The authorisation covers the act, not the
+safeguards: never weaken the Host, Origin, content-type, action-header or body
+validation to make a check easier, never widen the archive scope to prove it, and
+never treat a disposable-fake pass as evidence about the live stack. Record a
+destructive run as irreversible in the docs, with what was deleted and what was
+confirmed afterwards.

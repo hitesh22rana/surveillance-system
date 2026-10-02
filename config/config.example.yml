@@ -1,12 +1,34 @@
 # Four-camera Frigate zone prototype.
 #
-# Zones cover the full normalised frame on purpose: whole-view monitoring is the
-# intended initial default, so every view is covered from the first run instead
-# of only the part of the scene somebody happened to outline. A full-frame zone
-# is also noisier — expect more events than you want to read — so narrow each one
-# to the area you actually care about (a door, a driveway, a stairwell) in the
-# Frigate zone editor at https://localhost:8971/settings. Each camera keeps its
-# own independent zone; the four zones never overlap or share state.
+# Two zones per camera, on purpose, because they answer two different questions.
+# `camera_N_area` is the full normalised frame with loitering_time 0: "somebody is
+# on camera". `camera_N_loitering` is the same polygon with loitering_time 60:
+# "tracked in-zone presence has reached a minute". Alerts fire on the loitering
+# zone, snapshots are still saved on the area zone, and the retention worker pins
+# only what reached the threshold — so an ordinary walk-through ages out on the six
+# hour timer and only a deliberate presence is kept until somebody deletes it.
+#
+# What 60 seconds measures: Frigate advances the counter on tracked frames with the
+# object inside the zone, and detect.fps below is 3, so the threshold is 180
+# frames. That is tracked presence, NOT continuous wall-clock time — separate visits
+# by the same tracked object can accumulate toward it, and nothing here says the
+# object stood still, stayed in one place, or meant anything by being there.
+#
+# Both polygons are the whole frame to begin with: whole-view monitoring is the
+# intended initial default, so every view is covered from the first run instead of
+# only the part of the scene somebody happened to outline. That is also noisier
+# than anything you want to read — a full-frame loitering zone qualifies anybody
+# who waits for a door, finds a key or uses a phone — so narrow both zones to the
+# area you actually care about (a door, a driveway, a stairwell) in the Frigate
+# zone editor at https://localhost:8971/settings. Keep the two polygons identical
+# while you redraw them; they mean different things about the same place. Each
+# camera keeps its own independent zones, and the eight never overlap or share
+# state across cameras.
+#
+# This is a geometry prototype, not a judgement about danger: 60 seconds is a
+# starting threshold for "this presence is worth a human look". It is not a threat
+# assessment, and no model here makes one. Nothing in this file is a measured
+# accuracy claim, and no walkthrough has yet been run against it.
 #
 # Camera streams are placeholders too. Fill .env (never this file) with the real
 # RTSP URLs, passwords written raw. A camera that cannot be reached degrades on
@@ -74,30 +96,48 @@ cameras:
       camera_1_area:
         # Deliberate default: every part of this view counts, so no area is
         # silently unwatched. Narrow it to what you care about when you know
-        # the scene.
+        # the scene. loitering_time 0 means no tracked-presence requirement at all.
         coordinates: "0,0,1,0,1,1,0,1"
         inertia: 3
-        loitering_time: 3
+        loitering_time: 0
+        objects:
+          - person
+      camera_1_loitering:
+        # The same polygon as camera_1_area, with the rule that matters: 180
+        # tracked in-zone frames at 3 fps, which is 60 seconds. Redraw this one
+        # whenever you redraw the other.
+        coordinates: "0,0,1,0,1,1,0,1"
+        inertia: 3
+        loitering_time: 60
         objects:
           - person
     review:
       alerts:
         labels:
           - person
+        # Alerts are gated on the loitering zone, so an ordinary walk-through
+        # never becomes an alert. Only this zone is retained indefinitely.
         required_zones:
-          - camera_1_area
+          - camera_1_loitering
     snapshots:
       enabled: true
       timestamp: true
       bounding_box: true
+      # Snapshots stay on the area zone: saving an image of everybody who walks
+      # past is cheap at six hours, and keeping it is what the loitering rule is
+      # for.
       required_zones:
         - camera_1_area
       retain:
-        # 6 hours, in days. Short on purpose: the retention worker pins the
-        # events a person actually stood in the zone for, and a long window here
-        # would just hide an event the worker never saw.
+        # 6 hours, in days, for everything the worker has not pinned. Short on
+        # purpose: the retention worker pins the events that reached the tracked
+        # presence threshold, and a long window here would just hide an event the
+        # worker never saw. Snapshots pinned under an older whole-frame zone rule
+        # are NOT released by this — those stay until a person deletes them, so
+        # only newly captured ordinary snapshots are on this timer.
         default: 0.25
     record:
+      # Continuous recording stays off; this prototype keeps snapshots only.
       enabled: false
     live:
       streams:
@@ -119,28 +159,43 @@ cameras:
       camera_2_area:
         # Deliberate default: every part of this view counts, so no area is
         # silently unwatched. Narrow it to what you care about when you know
-        # the scene.
+        # the scene. loitering_time 0 means no tracked-presence requirement at all.
         coordinates: "0,0,1,0,1,1,0,1"
         inertia: 3
-        loitering_time: 3
+        loitering_time: 0
+        objects:
+          - person
+      camera_2_loitering:
+        # The same polygon as camera_2_area, with the rule that matters: 180
+        # tracked in-zone frames at 3 fps, which is 60 seconds. Redraw this one
+        # whenever you redraw the other.
+        coordinates: "0,0,1,0,1,1,0,1"
+        inertia: 3
+        loitering_time: 60
         objects:
           - person
     review:
       alerts:
         labels:
           - person
+        # Alerts are gated on the loitering zone, so an ordinary walk-through
+        # never becomes an alert. Only this zone is retained indefinitely.
         required_zones:
-          - camera_2_area
+          - camera_2_loitering
     snapshots:
       enabled: true
       timestamp: true
       bounding_box: true
+      # Snapshots stay on the area zone: saving an image of everybody who walks
+      # past is cheap at six hours, and keeping it is what the loitering rule is
+      # for.
       required_zones:
         - camera_2_area
       retain:
-        # 6 hours, in days. Short on purpose: the retention worker pins the
-        # events a person actually stood in the zone for, and a long window here
-        # would just hide an event the worker never saw.
+        # 6 hours, in days, for everything the worker has not pinned. Short on
+        # purpose: the worker pins the events that reached the tracked presence
+        # threshold, and a long window here would just hide an event the worker
+        # never saw.
         default: 0.25
     record:
       enabled: false
@@ -164,28 +219,43 @@ cameras:
       camera_3_area:
         # Deliberate default: every part of this view counts, so no area is
         # silently unwatched. Narrow it to what you care about when you know
-        # the scene.
+        # the scene. loitering_time 0 means no tracked-presence requirement at all.
         coordinates: "0,0,1,0,1,1,0,1"
         inertia: 3
-        loitering_time: 3
+        loitering_time: 0
+        objects:
+          - person
+      camera_3_loitering:
+        # The same polygon as camera_3_area, with the rule that matters: 180
+        # tracked in-zone frames at 3 fps, which is 60 seconds. Redraw this one
+        # whenever you redraw the other.
+        coordinates: "0,0,1,0,1,1,0,1"
+        inertia: 3
+        loitering_time: 60
         objects:
           - person
     review:
       alerts:
         labels:
           - person
+        # Alerts are gated on the loitering zone, so an ordinary walk-through
+        # never becomes an alert. Only this zone is retained indefinitely.
         required_zones:
-          - camera_3_area
+          - camera_3_loitering
     snapshots:
       enabled: true
       timestamp: true
       bounding_box: true
+      # Snapshots stay on the area zone: saving an image of everybody who walks
+      # past is cheap at six hours, and keeping it is what the loitering rule is
+      # for.
       required_zones:
         - camera_3_area
       retain:
-        # 6 hours, in days. Short on purpose: the retention worker pins the
-        # events a person actually stood in the zone for, and a long window here
-        # would just hide an event the worker never saw.
+        # 6 hours, in days, for everything the worker has not pinned. Short on
+        # purpose: the worker pins the events that reached the tracked presence
+        # threshold, and a long window here would just hide an event the worker
+        # never saw.
         default: 0.25
     record:
       enabled: false
@@ -209,28 +279,43 @@ cameras:
       camera_4_area:
         # Deliberate default: every part of this view counts, so no area is
         # silently unwatched. Narrow it to what you care about when you know
-        # the scene.
+        # the scene. loitering_time 0 means no tracked-presence requirement at all.
         coordinates: "0,0,1,0,1,1,0,1"
         inertia: 3
-        loitering_time: 3
+        loitering_time: 0
+        objects:
+          - person
+      camera_4_loitering:
+        # The same polygon as camera_4_area, with the rule that matters: 180
+        # tracked in-zone frames at 3 fps, which is 60 seconds. Redraw this one
+        # whenever you redraw the other.
+        coordinates: "0,0,1,0,1,1,0,1"
+        inertia: 3
+        loitering_time: 60
         objects:
           - person
     review:
       alerts:
         labels:
           - person
+        # Alerts are gated on the loitering zone, so an ordinary walk-through
+        # never becomes an alert. Only this zone is retained indefinitely.
         required_zones:
-          - camera_4_area
+          - camera_4_loitering
     snapshots:
       enabled: true
       timestamp: true
       bounding_box: true
+      # Snapshots stay on the area zone: saving an image of everybody who walks
+      # past is cheap at six hours, and keeping it is what the loitering rule is
+      # for.
       required_zones:
         - camera_4_area
       retain:
-        # 6 hours, in days. Short on purpose: the retention worker pins the
-        # events a person actually stood in the zone for, and a long window here
-        # would just hide an event the worker never saw.
+        # 6 hours, in days, for everything the worker has not pinned. Short on
+        # purpose: the worker pins the events that reached the tracked presence
+        # threshold, and a long window here would just hide an event the worker
+        # never saw.
         default: 0.25
     record:
       enabled: false
