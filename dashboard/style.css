@@ -1,5 +1,5 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Workbench · theme: Cobalt (dark adaptation)
- * tone: operational console · anchor hue: 256 · nav: N9 · footer: Ft2
+ * tone: operational console · anchor hue: 256 · nav: N9
  * pre-emit critique: P4 H5 E4 S5 R5 V5
  * contrast: designed to WCAG 2.1 minimums, pending browser verification · mobile: 320/375/414/768
  *
@@ -249,7 +249,11 @@ h2.section__title + .section__lede {
   background: var(--color-paper-3);
   color: var(--color-ink);
   font-family: var(--font-body);
-  font-size: var(--text-sm);
+  /* Every control this page offers the pointer is set at the same size, so a chip,
+   * a button, a check label and a page number are all read at the size they are
+   * aimed at. tokens.css steps straight from 13 px to 16 px, so the 14 px control
+   * size is declared here rather than approximated with the wrong step. */
+  font-size: 0.875rem;
   font-weight: 500;
   line-height: 1;
   cursor: pointer;
@@ -280,6 +284,21 @@ h2.section__title + .section__lede {
   .btn--primary:hover {
     background: var(--color-accent);
     border-color: var(--color-accent);
+  }
+}
+
+/* A way out of the current view rather than a move through it: Latest is not a
+ * step in a run, it is the single jump back to the newest page, so it takes the
+ * page's own background and keeps only the hairline the other buttons have. */
+.btn--quiet {
+  background: transparent;
+  color: var(--color-muted);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn--quiet:not([disabled]):hover {
+    background: var(--color-paper-3);
+    color: var(--color-ink);
   }
 }
 
@@ -522,7 +541,9 @@ h2.section__title + .section__lede {
   background: transparent;
   color: var(--color-ink-2);
   font-family: var(--font-readout);
-  font-size: var(--text-sm);
+  /* The same control size as .btn — a chip is a button that happens to hold a
+   * state, and it was set a step smaller than the actions beside it. */
+  font-size: 0.875rem;
   letter-spacing: 0.02em;
   cursor: pointer;
   white-space: nowrap;
@@ -562,6 +583,9 @@ h2.section__title + .section__lede {
   display: flex;
   flex-direction: column;
   gap: var(--space-xs);
+  /* The empty result below is taken out of the flow, and this is what it is
+   * taken out against. */
+  position: relative;
 }
 
 /* A legend is body copy, not a machine readout. At 11 px mono this was the
@@ -583,14 +607,15 @@ h2.section__title + .section__lede {
 }
 
 /* The selection controls are boxed as one object, so no button in it can be
- * read as the archive-wide action further down the page. Compact: the band
- * hugs the 44 px hit floors instead of padding them out. */
+ * read as the archive-wide action further down the page. The band takes the full
+ * 4 pt step rather than clipping the 44 px hit floors it holds, so the controls
+ * inside it are not touching the frame they sit in. */
 .review__bar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-xs) var(--space-sm);
-  padding: var(--space-2xs) var(--space-sm);
+  padding: var(--space-xs) var(--space-sm);
   border: 1px solid var(--color-rule-2);
   border-radius: var(--radius-md);
   background: var(--color-paper-2);
@@ -606,7 +631,7 @@ h2.section__title + .section__lede {
 
 .check__label {
   color: var(--color-ink-2);
-  font-size: var(--text-sm);
+  font-size: 0.875rem;
 }
 
 .check__input {
@@ -659,6 +684,15 @@ h2.section__title + .section__lede {
   text-wrap: pretty;
 }
 
+/* With nothing to say it occupies nothing: out of the flow, so it also claims none
+ * of the stack's gaps, and back in flow the moment it has a sentence. Not
+ * display:none, because a live region that is display:none is not announced when
+ * it refills — it has to stay in the accessibility tree to be heard at all. */
+.review__result:empty {
+  position: absolute;
+  min-height: 0;
+}
+
 .review__result[data-tone="ok"] {
   color: var(--color-ok);
 }
@@ -673,6 +707,76 @@ h2.section__title + .section__lede {
 
 .review__result[data-tone="pending"] {
   color: var(--color-muted);
+}
+
+/* ------------------------------------------------------------- pager ----- */
+
+/* Paging is navigation, so it is a nav landmark with its own name and not another
+ * band of buttons inside the review block. It is unboxed, and that is the point:
+ * the selection band above acts on ticks and the archive card below is the one
+ * destructive action on the screen, so a third framed strip holding nothing but
+ * page numbers would put a competing frame between the two of them. */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-2xs);
+  margin-block-start: var(--space-xs);
+}
+
+/* The run of numbers is one control read left to right, so it keeps its own gaps
+ * and its own baseline instead of dissolving into the row around it. It wraps at
+ * 320 rather than overflowing, which is the same answer the selection band gives.
+ * The markers are off: the page numbers are the content, and the base rule that
+ * clears them is written for a ul, not for this ol. */
+.pager__pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+/* One size for every control in the pager: the two steps, the numbers and the way
+ * back to the newest page are all the same 44 px target, the same 14 px sans label
+ * and the same fixed 40 px box, so the row reads as one band of hit targets instead
+ * of a set of differently sized boxes. The digits are tabular because a run of
+ * page numbers sits side by side and must not reflow as it moves. The vertical
+ * padding is dropped because the height is the hit floor and the flex centring
+ * already places the label inside it. */
+.pager .btn {
+  min-inline-size: 2.5rem;
+  padding: 0 var(--space-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The page on screen, stated once by the accent and once only. It is marked rather
+ * than pressed, so it is disabled — and the disabled wash is lifted back off,
+ * because an accent the operator cannot read is not an accent that tells them
+ * anything. */
+.pager__page[aria-current="page"] {
+  background: var(--color-accent-quiet);
+  border-color: var(--color-accent-line);
+  color: var(--color-ink);
+  opacity: 1;
+}
+
+/* What stands between two runs of pages. Not a control: nothing to press, nothing
+ * to focus, nothing to disable — the numbers either side of it are how the
+ * operator crosses it, and it is hidden from assistive technology because it says
+ * nothing they are not already told by the numbers. */
+.pager__gap {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-inline-size: 1.25rem;
+  color: var(--color-faint);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  user-select: none;
 }
 
 /* The archive-wide action is a separate block, below the list and below the
@@ -941,32 +1045,6 @@ h2.section__title + .section__lede {
   border-color: var(--color-rule-3);
 }
 
-/* ------------------------------------------------------------ footer ----- */
-
-.foot {
-  border-top: 1px solid var(--color-rule);
-  padding: var(--space-md) clamp(1rem, 4vw, 2.5rem);
-  padding-inline: max(clamp(1rem, 4vw, 2.5rem), env(safe-area-inset-left));
-  padding-bottom: max(var(--space-md), env(safe-area-inset-bottom));
-}
-
-.foot__line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-xs) var(--space-sm);
-  color: var(--color-faint);
-  font-family: var(--font-readout);
-  font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-}
-
-.foot__mark {
-  color: var(--color-muted);
-  text-transform: uppercase;
-  letter-spacing: var(--tracking-readout);
-}
-
 /* -------------------------------------------------------- responsive ----- */
 
 /* Declared before the narrower breakpoint below, so the one-column rules there
@@ -1015,6 +1093,43 @@ h2.section__title + .section__lede {
 
   .review__count {
     margin-inline-start: 0;
+  }
+
+  /* Below 480 the pager is two rows: the two steps and the way back to the newest
+   * page share one row of three, and the run of page numbers takes a full-width
+   * row under them instead of splitting the controls across two ragged rows. The
+   * source order is unchanged — the numbers stay between the two steps for the
+   * keyboard and for anything reading the page — so the visual rows are placed
+   * with grid areas rather than by moving markup.
+   *
+   * The numbers keep the 40 px box and the 44 px floor they have everywhere else,
+   * so a run too wide for 320 wraps onto a second line of its own rather than
+   * overflowing the screen or being squeezed below a tap target. */
+  .pager {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: var(--space-2xs) var(--space-xs);
+  }
+
+  #page-prev {
+    grid-area: 1 / 1;
+  }
+
+  #page-next {
+    grid-area: 1 / 2;
+  }
+
+  #page-latest {
+    grid-area: 1 / 3;
+  }
+
+  .pager__pages {
+    grid-area: 2 / 1 / 3 / 4;
+    justify-content: center;
+  }
+
+  .pager__gap {
+    min-inline-size: 1rem;
   }
 
   /* Narrow enough that the dialog's two actions wrap: each takes a full row, in

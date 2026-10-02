@@ -197,15 +197,14 @@
             aria-live="polite"
           ></p>
 
-          <div class="review__bar">
+          <nav class="pager" aria-label="Saved detections pages">
             <button class="btn" type="button" id="page-prev" disabled>Previous</button>
+            <ol class="pager__pages" id="page-numbers"></ol>
             <button class="btn" type="button" id="page-next" disabled>Next</button>
-            <label class="check">
-              <span class="check__label">Page</span>
-              <select id="page-select" disabled></select>
-            </label>
-            <button class="btn" type="button" id="page-latest" disabled>Latest</button>
-          </div>
+            <button class="btn btn--quiet" type="button" id="page-latest" disabled>
+              Latest
+            </button>
+          </nav>
         </div>
 
         <ul class="events" id="events" hidden></ul>
@@ -228,18 +227,6 @@
         </section>
       </section>
     </main>
-
-    <footer class="foot">
-      <p class="foot__line">
-        <span class="foot__mark">Surveillance Console</span>
-        <span aria-hidden="true">·</span>
-        <span>Local prototype</span>
-        <span aria-hidden="true">·</span>
-        <span>Manual snapshot review</span>
-        <span aria-hidden="true">·</span>
-        <span>Email alerts not enabled</span>
-      </p>
-    </footer>
 
     <dialog
       class="confirm"

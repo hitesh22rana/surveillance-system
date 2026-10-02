@@ -22,6 +22,11 @@
  *   - Timers never overlap: one loop for stats and events, both stopped while
  *     the tab is hidden. The archive is re-read only on its latest page, so a
  *     page the operator is reading through history stays where they put it.
+ *   - The page and the camera are the whole of the URL state. Both are read from
+ *     the query string on load, both are pushed onto the history when an operator
+ *     asks for a different view, and Back restores them and reads that page
+ *     again. A poll never writes history, and the worker's own clamp is written
+ *     back by replacement so the URL always names the page actually on screen.
  *   - Deleting a snapshot is the one write this page can make, and it takes an
  *     explicit confirmation: two fixed endpoints, one POST, no retry, a finite
  *     timeout, and a captured id list so nothing that happens while the
@@ -121,8 +126,8 @@
     events: $("events"),
     eventsEmpty: $("events-empty"),
     pagePrev: $("page-prev"),
+    pageNumbers: $("page-numbers"),
     pageNext: $("page-next"),
-    pageSelect: $("page-select"),
     pageLatest: $("page-latest"),
     statLive: $("stat-live"),
     statDetectRate: $("stat-detect-rate"),
@@ -237,6 +242,12 @@
 
   // "camera_2" -> "Camera 2". Internal names never reach the page.
   const cameraLabel = (camera) => "Camera " + String(camera).slice(-1);
+
+  /* The filters this page answers to: the one that is not a camera, plus the four
+   * that are. A value read out of the URL is untrusted input like any other, so
+   * both the URL and a clicked chip are checked against this and an unknown name
+   * is refused here rather than forwarded to the worker. */
+  const knownCamera = (value) => value === "all" || CAMERAS.includes(value);
 
   async function fetchJSON(url, timeoutMs = TIMEOUT_MS) {
     const controller = new AbortController();
@@ -712,7 +723,7 @@
   const visibleRows = () => state.rows;
 
   let renderedSignature = null;
-  let renderedOptions = 0;
+  let renderedPages = null;
 
   // Rows are rebuilt from the template, and a row's checkbox is remembered by
   // node rather than by a data attribute, so a tracker id is never written into
@@ -756,26 +767,95 @@
     );
   }
 
-  /* Native controls only, and every one of them disabled whenever a read is in
-   * flight or a delete is: a page control that answered while the list behind it
-   * was still loading would be describing a page nobody can see. */
+  /* How many page numbers are ever on screen, however long the archive grows.
+   * This counts the interior run only: with a page pinned at each end beside it,
+   * the number of buttons on screen never exceeds seven. The run is bounded so
+   * the control is the same width on a hundred pages as on eight: a page count is
+   * not allowed to become a layout. */
+  const PAGE_WINDOW = 5;
+
+  /* The run of page numbers to show, or null when the whole set already fits.
+   * Five consecutive pages, slid so the current page sits in the middle and so
+   * the run never runs off either end — near the first page it starts at 1, near
+   * the last it ends at the last, and there is never a short gap at an edge. */
+  function pageRun(pages, current) {
+    if (pages <= PAGE_WINDOW) return null;
+    const side = Math.floor(PAGE_WINDOW / 2);
+    const from = Math.min(Math.max(current - side, 1), pages - PAGE_WINDOW + 1);
+    return { from: from, to: from + PAGE_WINDOW - 1 };
+  }
+
+  /* A page number is a button, not an option in a select. A select would put the
+   * whole page count behind one control that has to be opened before any of it is
+   * reachable, and it renders as whatever the platform decides; buttons are the
+   * same control everywhere, are reachable from the keyboard one at a time, and
+   * are what the back button and a copied link come back to. It is returned
+   * wrapped in an li because an ol may only hold li, not bare buttons. */
+  function pageButton(page) {
+    const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.className = "btn pager__page";
+    button.type = "button";
+    button.dataset.page = String(page);
+    // Spoken as "Page 4" inside a named nav, which a bare "4" is not.
+    button.setAttribute("aria-label", "Page " + page);
+    button.textContent = String(page);
+    item.appendChild(button);
+    return item;
+  }
+
+  /* What stands between two runs of pages. An <li> and not a button: there is
+   * nothing to press, nothing to focus and nothing to disable, and the numbers
+   * either side of it are how the operator crosses it. */
+  function pageGap() {
+    const item = document.createElement("li");
+    item.className = "pager__gap";
+    item.setAttribute("aria-hidden", "true");
+    item.textContent = "…";
+    return item;
+  }
+
+  /* Every one of these controls is dead whenever a read is in flight or a delete
+   * is: a page control that answered while the list behind it was still loading
+   * would be describing a page nobody can see. The marked current page is disabled
+   * too, because asking again for the page already on screen is not a move. */
   function renderPager() {
     const busy = state.eventsLoading || state.deleting;
     const pages = state.pages;
+    const run = pageRun(pages, state.page);
 
-    if (renderedOptions !== pages) {
-      while (el.pageSelect.firstChild) el.pageSelect.removeChild(el.pageSelect.firstChild);
-      for (let page = 1; page <= pages; page += 1) {
-        const option = document.createElement("option");
-        option.value = String(page);
-        option.textContent = String(page);
-        el.pageSelect.appendChild(option);
+    /* Buttons are rebuilt only when the visible set changes, so a poll landing on
+     * the same page cannot take the focus off the page button an operator is on
+     * with a keyboard. The current page is re-stated below every pass, however it
+     * was arrived at: a click, a deep link, or the back button. */
+    const signature = run === null ? "all:" + pages : run.from + ":" + run.to;
+    if (renderedPages !== signature) {
+      renderedPages = signature;
+      while (el.pageNumbers.firstChild) el.pageNumbers.removeChild(el.pageNumbers.firstChild);
+      if (run === null) {
+        for (let page = 1; page <= pages; page += 1) el.pageNumbers.appendChild(pageButton(page));
+      } else {
+        if (run.from > 1) {
+          el.pageNumbers.appendChild(pageButton(1));
+          el.pageNumbers.appendChild(pageGap());
+        }
+        for (let page = run.from; page <= run.to; page += 1) {
+          el.pageNumbers.appendChild(pageButton(page));
+        }
+        if (run.to < pages) {
+          el.pageNumbers.appendChild(pageGap());
+          el.pageNumbers.appendChild(pageButton(pages));
+        }
       }
-      renderedOptions = pages;
     }
-    el.pageSelect.value = String(state.page);
 
-    el.pageSelect.disabled = busy || pages <= 1;
+    for (const button of el.pageNumbers.querySelectorAll(".pager__page")) {
+      const current = button.dataset.page === String(state.page);
+      if (current) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+      button.disabled = busy || current;
+    }
+
     el.pagePrev.disabled = busy || state.page <= 1;
     el.pageNext.disabled = busy || state.page >= pages;
     el.pageLatest.disabled = busy || state.page === 1;
@@ -1481,9 +1561,14 @@
       if (!parsed) throw new Error("unexpected response shape");
 
       state.rows = parsed.events.filter((event) => listedEvent(event));
-      // The worker's own page number is adopted, which is how a page that has just
-      // been deleted out from under the operator is clamped to the last one.
+      /* The worker's own page number is adopted, which is how a page that has just
+       * been deleted out from under the operator is clamped to the last one, and
+       * how a deep link past the end of a shorter archive lands on a real page.
+       * The URL is corrected to the page that was actually read — and by
+       * replacement rather than by a push, because the operator did not ask for
+       * this page and it is not a step in the history they walked here. */
       state.page = parsed.page;
+      if (parsed.page !== page) writeUrlState(false);
       state.pageSize = parsed.pageSize;
       state.total = parsed.total;
       state.pages = parsed.pages;
@@ -1650,12 +1735,13 @@
     polling = true;
     setBusy(true);
     try {
-      /* The archive is only re-read on its latest page. A page the operator is
-       * reading through history holds still until they ask for another one, and
-       * the status and the live pictures are unaffected either way. */
+      /* The archive is only re-read on its latest page, and only when no other
+       * read of it is already in flight. A page the operator is reading through
+       * history holds still until they ask for another one, and the status and
+       * the live pictures are unaffected either way. */
       await Promise.all([
         readStats(),
-        state.page === 1 ? readEvents(false) : Promise.resolve(),
+        state.page === 1 && !state.eventsLoading ? readEvents(false) : Promise.resolve(),
       ]);
     } finally {
       polling = false;
@@ -1689,14 +1775,71 @@
 
   /* --------------------------------------------------------------- wiring -- */
 
+  /* ---------------------------------------------------------- url state --- */
+
+  /* Page and camera are the two things an operator navigates by, so both live in
+   * the query string: a deep link has to survive a reload, and the back button has
+   * to step back through the pages somebody actually read. Nothing else is written
+   * there — the archive is read-only apart from the one delete above, and a URL is
+   * not a place to keep anything else.
+   *
+   * This is the initial parse, and it deliberately does not clamp to the page
+   * count this page starts out with: state.pages is 1 until the worker's first
+   * answer lands, so clamping here would turn a deep link to page 5 into a read of
+   * page 1 and the operator would never see the archive they asked for. An unusable
+   * value falls back to the first page and to every camera instead. */
+  const PAGE_PARAM = /^[1-9][0-9]*$/;
+
+  function readUrlState() {
+    const params = new URLSearchParams(window.location.search);
+    const rawPage = params.get("page");
+    const rawCamera = params.get("camera");
+    const page = Number(rawPage);
+    return {
+      page: rawPage !== null && PAGE_PARAM.test(rawPage) && Number.isSafeInteger(page) ? page : 1,
+      filter: knownCamera(rawCamera) ? rawCamera : "all",
+    };
+  }
+
+  /* Canonical: the page is written only when it is not the first, and the camera
+   * only when it is not all, so the common case is a bare path and no two
+   * navigations ever produce two spellings of the same view. Every other parameter
+   * and the fragment are left exactly as they were found — this page did not put
+   * them there and does not get to clean them up. A push is a move the operator
+   * asked for; a replace is the same view being described more accurately. */
+  function writeUrlState(push) {
+    const url = new URL(window.location.href);
+    if (state.page > 1) url.searchParams.set("page", String(state.page));
+    else url.searchParams.delete("page");
+    if (state.filter === "all") url.searchParams.delete("camera");
+    else url.searchParams.set("camera", state.filter);
+    const entry = url.pathname + url.search + url.hash;
+    if (push) window.history.pushState(null, "", entry);
+    else window.history.replaceState(null, "", entry);
+  }
+
+  /* The pressed state of the filter chips follows state.filter instead of being
+   * written at the click, so a view restored from a link or from the back button
+   * shows the filter it is rather than leaving the old chip lit. */
+  function markFilter(camera) {
+    for (const chip of el.filters.querySelectorAll("button[data-camera]")) {
+      const on = chip.dataset.camera === camera;
+      chip.classList.toggle("is-on", on);
+      chip.setAttribute("aria-pressed", on ? "true" : "false");
+    }
+  }
+
   /* Page and camera are both the worker's to answer, so a move is a new read.
    * Nothing here touches a live player: turning a page is a different thing from
-   * reconnecting four cameras. */
+   * reconnecting four cameras. The move is pushed onto the history stack, because
+   * the operator asked for this page and Back has to return them to the one they
+   * were reading. */
   function goToPage(target) {
     if (state.deleting || state.eventsLoading) return;
     const wanted = Math.min(Math.max(target, 1), state.pages);
     if (wanted === state.page) return;
     state.page = wanted;
+    writeUrlState(true);
     readEvents(true);
   }
 
@@ -1704,17 +1847,17 @@
     const button = event.target.closest("button[data-camera]");
     if (!button) return;
     const chosen = button.dataset.camera;
-    if (chosen !== "all" && REQUIRED_ZONE[chosen] === undefined) return;
+    if (!knownCamera(chosen)) return;
+    // The filter already on screen, already on its first page: nothing to change,
+    // and nothing to add to the stack Back walks.
+    if (chosen === state.filter && state.page === 1) return;
     state.filter = chosen;
     // The filtered archive has its own paging, so page 7 of the old set is not a
     // page of the new one. The selection is left alone: a camera filter changes
     // what is on screen, never what the operator has already decided.
     state.page = 1;
-    for (const other of el.filters.querySelectorAll("button[data-camera]")) {
-      const on = other === button;
-      other.classList.toggle("is-on", on);
-      other.setAttribute("aria-pressed", on ? "true" : "false");
-    }
+    writeUrlState(true);
+    markFilter(chosen);
     readEvents(true);
   });
 
@@ -1726,13 +1869,37 @@
     goToPage(state.page + 1);
   });
 
-  el.pageSelect.addEventListener("change", () => {
-    goToPage(Number(el.pageSelect.value));
+  /* One delegated handler on the run itself, because the run is rebuilt whenever
+   * the visible set changes and a per-button listener would have to be re-attached
+   * every time. The same reason the row boxes are delegated. */
+  el.pageNumbers.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-page]");
+    if (!button || button.disabled) return;
+    goToPage(Number(button.dataset.page));
   });
 
   // The newest page, asked for rather than waited for.
   el.pageLatest.addEventListener("click", () => {
     goToPage(1);
+  });
+
+  /* Back and Forward are navigation, not a poll: they restore the page and the
+   * camera the URL names and read that page. Nothing is pushed — the entry being
+   * restored is already on the stack — and a read that was already in flight is
+   * dropped by the generation counter in readEvents rather than answering a page
+   * the operator has already walked away from.
+   *
+   * While a delete is in flight the restore is still applied to state, so the URL
+   * and the page on screen agree, but its read is left to the re-read that follows
+   * the POST: the captured body cannot be widened by any of this, and one read at
+   * a time is the rule the whole file follows. */
+  window.addEventListener("popstate", () => {
+    const next = readUrlState();
+    state.page = next.page;
+    state.filter = next.filter;
+    markFilter(next.filter);
+    if (state.deleting) return;
+    readEvents(true);
   });
 
   el.retry.addEventListener("click", () => {
@@ -1777,8 +1944,26 @@
     }
   });
 
+  /* The page and the camera are taken from the URL before anything is drawn and
+   * before the first archive read, so a reload straight onto a deep link arrives
+   * on the page it names rather than on page 1 of every camera. */
+  const initial = readUrlState();
+  state.page = initial.page;
+  state.filter = initial.filter;
+  markFilter(state.filter);
+  // Canonical from the first paint, so the URL an operator copies out of the
+  // address bar is one a reload comes back to. Nothing is pushed: nothing has been
+  // navigated yet.
+  writeUrlState(false);
+
   setBarState("pending", "Connecting to cameras");
   render();
+
+  /* The first archive read is asked for whatever page the URL named, deep link
+   * included. The poll loop below only re-reads the newest page, so a reload onto
+   * page 5 would otherwise show four cameras and no archive at all. */
+  readEvents(true);
+
   start();
 
   playerLoaded.then(() => {
