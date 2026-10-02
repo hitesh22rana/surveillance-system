@@ -32,11 +32,16 @@ changes produce Custom when their settings differ. Camera 4 cannot be disarmed.
 Manual settings persist across service restarts.
 
 While Away is active, the dashboard asks for confirmation before disarming one
-camera or switching to Home. Cancel and Escape preserve the settings. Animal
-monitoring on Cameras 1–3 continues independently of arming. Ordinary snapshots
-retain the six-hour window; kept snapshots remain until manually deleted. These
-rules preserve review candidates, and do not identify intent, family members,
-fighting or weapons. Live detection accuracy still requires controlled evaluation.
+camera or switching to Home. Cancel and Escape preserve the settings. **Those two
+settings stop armed person-presence review and only that.** Camera 4's area_4
+stays armed, the animal rule on cameras 1–3 continues with no arming needed, and the
+experimental possible-fighting watch on cameras 2 and 3 continues whatever these
+controls say. Ordinary snapshots retain the six-hour window; kept snapshots remain
+until manually deleted. These rules preserve review candidates, and do not identify
+intent, family members or weapons. The one separate model in the repository is that
+experimental fighting watch, and `possible_fighting` is a possibility a model
+reported rather than a finding. Live detection accuracy still requires controlled
+evaluation, and the fighting watch has no measured accuracy at all.
 
 ## What is actually known
 
@@ -60,13 +65,21 @@ fighting or weapons. Live detection accuracy still requires controlled evaluatio
   measured failure justifies it. That trigger is a number, not a hunch: a
   specific class of false negative or false positive that tuning `zones`,
   `objects`, `motion`, and `detect.fps` cannot resolve.
-- **There is exactly one detection rule: a person loitering in a named zone.** No
-  behaviour model, no anomaly detection, no classification beyond `person`, and
-  no fall-over, package or line-crossing rule. Nothing in the repository should
-  be read as implying otherwise, because none of it exists. As of 2026-10-02 the
-  rule is **60 seconds of tracked in-zone presence**, with the zone polygon still
-  the full frame: a geometry prototype chosen to be tunable, and explicitly not a
-  claim that anybody was doing anything wrong. The counter advances on tracked
+- **Two detection rules, one of them experimental and unmeasured.** The first is a
+  `person` loitering in a named zone: no behaviour model, no anomaly detection, no
+  classification beyond `person`, and no fall-over, package or line-crossing rule.
+  The second is an explicitly experimental video model on **cameras 2 and 3 only**
+  that asks whether sixteen frames look violent and, on two consecutive windows, sets
+  a native `possible_fighting` sub-label and the retain flag on matching `person`
+  events. It runs continuously, independently of arming, with no control anywhere,
+  and it is authorised to do those two things on events that already exist and
+  nothing else: no delete, no un-pin, no configuration edit, no new event. There is
+  still **no weapon, intent, identity or anomaly detection**, and none is
+  approximated. See [`docs/fighting.md`](fighting.md) for that sidecar's model and
+  runtime; its accuracy on these two rooms is **unmeasured**. As of 2026-10-02 the
+  zone rule is **60 seconds of tracked in-zone presence**, with the zone polygon
+  still the full frame: a geometry prototype chosen to be tunable, and explicitly
+  not a claim that anybody was doing anything wrong. The counter advances on tracked
   frames with the object inside the zone, and detection runs at 3 fps, so 180
   frames is 60 seconds. It is **not** continuous wall-clock time: separate visits
   by the same tracked object can accumulate toward the threshold, and nothing here
@@ -192,9 +205,17 @@ conditions below have not been met.
   retention worker on the internal network: `GET /api/snapshots/summary`,
   `GET /api/snapshots/events` and `POST /api/snapshots/delete`. Only the events
   read forwards a client query, and only to the local gateway, which validates
-  `page` and `camera` strictly before touching the archive. See Phase 2b.
+  `page`, `camera` and `review` strictly before touching the archive. See Phase 2b.
+- **One exact read reaches the fighting sidecar**: `GET/HEAD /api/activity/fighting`
+  proxies that service's own read-only `/status` and nothing else of it. The
+  upstream is a variable, so Docker's resolver turns `fighting:8091` into an address
+  and the dashboard starts and serves everything else when the sidecar is absent. No
+  client query is forwarded and a non-empty one is refused with 400, no CORS is sent
+  in either direction, the server's 4 s timeouts are inherited, and every other
+  `/api/activity` path is 404. It adds **no** browser write: the browser still has
+  exactly the two authorised writes.
 - Frigate's API port is never published. Both published ports are loopback, and
-  the retention gateway publishes none.
+  the retention gateway publishes none, nor does the fighting sidecar.
 - The console is unauthenticated by construction, because loopback-only is the
   boundary. Remote extension requires authentication and is Phase 4.
 - Per-camera status is derived from `camera_fps`, `process_fps` and
@@ -319,23 +340,32 @@ it explicitly.
   archive.
 - `GET /api/snapshots/events` is the **paginated read** that the fixed-50
   `/api/events` cannot replace, because the archive is deeper than 50 rows, and
-  it is the source the dashboard's pager reads. It takes **optional** `page` and
-  `camera` and nothing else: a repeated, unknown or
-  blank parameter, a page that is not a positive whole number, or a camera that is
-  not `all` or one of the four configured names is refused before any upstream
+  it is the source the dashboard's pager reads. It takes **optional** `page`,
+  `camera` and `review` and nothing else: a repeated, unknown or
+  blank parameter, a page that is not a positive whole number, a camera that is
+  not `all` or one of the four configured names, or a `review` that is not `all` or
+  `kept` is refused before any upstream
   request. It answers `{"events": [...], "page": <int>, "page_size": 25,
-  "total": <int>, "pages": <int>}` - **25 rows per page**, newest first, with the
-  camera filter applied **before** the page is cut, so `total` and `pages` always
-  describe the filtered set. A page past the last is clamped to the last rather
+  "total": <int>, "pages": <int>}` - **25 rows per page**, newest first, with both
+  filters applied **before** the page is cut, so `total` and `pages` always
+  describe the filtered set and the two combine. A page past the last is clamped to
+  the last rather
   than refused, because a page that is one behind after deletions still needs an
   answer. The read walks the archive in order to count it, so it is bounded by the
   same page cap as the deletion and answers 503 rather than a short page that reads
-  like a whole one.
+  like a whole one. **`review=kept` is exactly the rows carrying
+  `retain_indefinitely` true and nothing else**: no label list, no zone list, no
+  read of the armed state. That is why a record left over from the removed 60-second
+  rule and a kept animal are both in it, and an unflagged person inside a watched
+  area is not. The archive-wide count and delete scope are **not** narrowed by it.
 - `POST /api/snapshots/delete` accepts **either** `{"ids": [<native id>, ...]}`
   (1 to 1000, non-empty, duplicates folded) **or** `{"all": true, "before":
   <the summary cutoff>}` - never both, never neither, and no other key. It
   answers `{"deleted": <int>, "missing": <int>, "failed": [<id>, ...],
-  "active": <int>}`, and the three counts always add up to what was selected.
+  "active": <int>}`, and the three counts always add up to what was selected. It
+  takes **no query string on any method**, at the proxy and in the worker: a
+  variable `proxy_pass` drops arguments silently rather than forwarding them, so
+  the guard is explicit rather than inherited.
 - **`all` is fail-closed.** The whole archive is walked first, from the beginning
   of time, and if the walk cannot reach the end of the list - the page cap, an
   upstream failure, a malformed page - **nothing is deleted at all** and the
@@ -442,11 +472,21 @@ in-zone presence** in a full-frame zone - is a presence counter, and it
 camera for a minute". It **measures nothing about how the object behaved**: not
 whether it moved, not whether it left and came back, and not intent. Whether it
 excludes an ordinary crossing is **unmeasured** - no controlled walkthrough has been
-run - so no claim either way is recorded here. The owner's stated direction for
-what comes next is activity-based suspicious detection, covering activity that
-suggests weapons or harm. That is a design direction recorded here, **not a built
-feature**: no model has been selected, evaluated, or trained, and nothing in this
-repository implements it.
+run - so no claim either way is recorded here.
+
+One narrow piece of that direction is now built and is called out separately
+because of what it is: the **experimental possible-fighting watch** on cameras 2 and
+3, a small pinned video model that sets a `possible_fighting` sub-label and the
+retain flag on matching `person` events. It is two-class violence/nonviolence
+scoring of a 16-frame window, not activity understanding: it does not know who, or
+what anybody meant, or whether a weapon was present, and it is **unmeasured** on
+these rooms. See [`docs/fighting.md`](fighting.md).
+
+The owner's stated direction for what comes next beyond that is
+activity-based suspicious detection, covering activity that suggests weapons or
+harm. That is a design direction recorded here, **not a built feature**: no model
+has been selected, evaluated, or trained for it, and nothing in this repository
+implements it.
 
 What such a phase would have to define before any of it counts: zones narrowed
 from the full frame to the actual areas of interest, the hours it applies,
@@ -561,10 +601,12 @@ classification rule and added none.
   Detection stays on 352×288 at 3 fps; the live channel stays at its source's
   reported 25 fps. Neither changed with the loitering rule or the deletion
   endpoint.
-- Retention: six hours for an ordinary snapshot (`0.25` days), and Frigate's own
-  `retain_indefinitely` for a person event that reached the threshold in its own
-  camera's loitering zone. Continuous recordings stay disabled. Both lifetimes are
-  Frigate's own; go2rtc restreams and retains nothing.
+- **Retention: three lifetimes, two of them unbounded.** Six hours for an ordinary
+  snapshot (`0.25` days), and Frigate's own `retain_indefinitely` for a `person`
+  event that reached the threshold in its own camera's loitering zone, for a kept
+  animal, and for a `person` event the experimental fighting watch labelled. All
+  three keepers set the same flag and none of them expires it. Continuous recordings
+  stay disabled. Both timers are Frigate's own; go2rtc restreams and retains nothing.
 - **Deletion, revised 2026-10-02 on the owner's explicit instruction.** It was
   "a named CLI call by the operator, never a button in the browser". It is now
   that plus one authorised controlled deletion in the UI: the reviewed rows or the
@@ -576,9 +618,11 @@ classification rule and added none.
   unchanged and are not negotiable - exact Host, matching Origin, JSON content
   type, action header, full validation before any upstream request, and a person
   deciding to do it.
-- Only "a person loitering in a named zone" is detected. No behaviour, anomaly or
-  classification detection is in scope, and none is built. The 60-second counter
-  measures tracked presence, not behaviour and not risk.
+- Only "a person loitering in a named zone" is detected by the object detector, and
+  one experimental video model asks a separate, narrow question about two rooms.
+  No weapon, intent, identity or anomaly detection is in scope, and none is built.
+  The 60-second counter measures tracked presence, not behaviour and not risk, and
+  `possible_fighting` is a model's possibility rather than a finding.
 - No footage or camera credentials are sent to OpenCode or committed to Git.
 - Detection stays on the home host; email requires internet only for delivery.
 - Measure at least ten inside-zone and ten outside-zone passages per camera in

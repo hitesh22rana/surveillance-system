@@ -64,10 +64,12 @@ separately, on its own low substream at 3 fps.
   endpoint.
 - Detector: the bundled SSDLite MobileNetV2 on OpenVINO, CPU, tracking `person` on
   all four cameras plus the ten COCO 91 animal classes on `camera_1` … `camera_3`.
-  No custom training or inference code, and no behaviour, anomaly or
-  classification model of any kind: a person entering an **armed** camera's own
-  restricted area, or an animal on one of the first three cameras, are the only
-  rules that exist.
+  No custom training or inference code for the object detector, and no behaviour,
+  anomaly or classification model built on it: a person entering an **armed**
+  camera's own restricted area, or an animal on one of the first three cameras, are
+  the rules that exist on top of it. A separate, explicitly experimental video model
+  exists for one narrow question; see
+  [Possible fighting](#possible-fighting-experimental).
 - Continuous recording disabled (`record.enabled: false`).
 - **Snapshots.** An ordinary snapshot is kept **6 hours**
   (`snapshots.retain.default: 0.25`, in days). Frigate's periodic cleanup runs
@@ -83,9 +85,10 @@ separately, on its own low substream at 3 fps.
   Camera 4. It is a **candidate for a person to look at**, and nothing more. It is
   not a direction - a zone says where somebody was, not which side of a boundary
   they came from. It is not an identity - the detector reports one class,
-  `person`, and cannot tell family from anyone else. And there is **no fighting,
-  behaviour or anomaly detection in this repository at all**; the object model is
-  COCO 91, which has no such class. On Cameras 2 and 3 the area is the whole frame,
+  `person`, and cannot tell family from anyone else. And the object model itself is
+  COCO 91, which has no behaviour, anomaly or fighting class: the one place a
+  separate video model is used, it is the experimental sidecar below, not the
+  detector. On Cameras 2 and 3 the area is the whole frame,
   so arming one keeps every person in view for as long as it stays armed -
   presence, not an incident, and a deliberate limit of what a zone can say.
 - Two loopback ports, nothing else:
@@ -98,6 +101,10 @@ separately, on its own low substream at 3 fps.
   any request whose `Host` is not the dashboard's own published address. Its root
   filesystem stays read-only; the one writable path is the named volume holding
   the operator's arming.
+- The `fighting` container publishes **no port** either. nginx reaches it as
+  `fighting:8091` on the same internal network, on one exact read-only path,
+  `GET /api/activity/fighting`. Its model weights are provisioned into a mounted
+  directory from **outside this repository** and are never downloaded at runtime.
 - Target platform is **Linux + Docker**. Docker on macOS gives no guaranteed GPU
   acceleration, so detection latency measured there is not representative.
 
@@ -132,7 +139,8 @@ separately, on its own low substream at 3 fps.
 | Controlled deletion through the dashboard | **done once, 2026-10-02, with the owner's explicit authorisation** - one ended experimental snapshot deleted via the dashboard `POST` (`deleted: 1`, `missing: 0`, `failed: []`, `active: 0`), its image URL then 404, no archive wipe, and the Cancel confirmation observed doing nothing |
 | Archive pagination source | **API live 2026-10-02** - `GET /api/snapshots/events` returns the archive over 25-row pages with `total`/`pages`; over 100 snapshots across 5 pages were read, including rows older than the legacy 50 |
 | Dashboard pager | **observed in a browser 2026-10-02** - the page reads `GET /api/snapshots/events` at 25 rows per page and drives `page`/`camera` from its own controls, including a latest-page jump and a clamp to the last page; the measured behaviour is the final browser validation below |
-| Saved detections review filter | **implemented, PASS in `python3 scripts/check_console_api.py`** - against the same disposable fake Frigate, `review=kept` narrows rows, `total` and `pages` before the page is cut, so flagged rows beyond page 1 and the combined camera filter are both covered; the kept set is `retain_indefinitely` alone, so a legacy flagged row and a flagged animal are in and an unflagged person inside its own watched area is out; the four camera totals add up to the all-camera one, a page past the end clamps, and the archive count behind the archive-wide delete is still the whole archive. Eleven unrecognised, repeated, blank or no-value `review` values are refused with 400 before any upstream request, and seven query strings are refused with 400 on the delete path. **Not exercised in a browser** |
+| Saved detections review filter | **implemented, PASS in `python3 scripts/check_console_api.py`** - against the same disposable fake Frigate, `review=kept` narrows rows, `total` and `pages` before the page is cut, so flagged rows beyond page 1 and the combined camera filter are both covered; the kept set is `retain_indefinitely` alone, so a legacy flagged row and a flagged animal are in and an unflagged person inside its own watched area is out; the four camera totals add up to the all-camera one, a page past the end clamps, and the archive count behind the archive-wide delete is still the whole archive. Eleven unrecognised, repeated, blank or no-value `review` values are refused with 400 before any upstream request, and seven query strings are refused with 400 on the delete path. **Observed live by Codex on 2026-10-03, owner has not reviewed it yet**: 796 all detections against 137 natively retained rows over 6 pages, page 2 / reload / Back working, Camera 2 + kept answering 85 rows over 4 pages, all four players still 2560×1440, and 320 px with no overflow and 44 px review buttons |
+| Experimental possible-fighting watch | **implemented, UI lane only, static checks PASS and live run still owed** - `scripts/fighting.py` and its own checks belong to another lane. This lane added `GET /api/activity/fighting` (one exact path, fixed `/status`, no forwarded query, 4 s timeouts, variable upstream so the dashboard starts without it, every other `/api/activity` path 404), the Possible fighting section, the Possible fighting activity row chip and the viewer caption, and the Home/disarm copy that names what keeps running. Static: `node --check`, `python3 -m py_compile` on all five scripts, and `node scripts/check_entry_ui.mjs` all pass. **Not yet run**: `scripts/check.py` against the deployed route, and any browser review. **No accuracy figure exists or is claimed** |
 | Final browser validation | **observed 2026-10-02** - the archive read **133 rows over 6 pages at 25**; one checkbox selected **1**, and **Next** carried that **1 off-page**; **Select all shown** gave **26 including the 1 held off-page**, and the selected-delete dialog correctly named **26**; **Cancel** and **Clear** both worked; jumping to the last page (**6**) showed the oldest rows, **126** and up; **Latest** returned to page 1; the `camera_4` filter returned an empty page 1; the archive-delete dialog counted **131 across all pages** and was then cancelled; no horizontal overflow at **320 px** or **1280 px**, desktop rows **78 px**, and all four players held **2560×1440** throughout. **No destructive button was clicked in this pass** - the one deleted snapshot came earlier from the terminal API under the owner's authorisation |
 | Ordinary six-hour expiry, watched end to end | **not done** - applied and confirmed loaded in native `/api/config`; nobody waited the window out |
 | Snapshots already kept under the old rule | **kept, and still a manual job** - nothing unpins them; only newly captured ordinary snapshots are on the six-hour timer |
@@ -395,8 +403,11 @@ What it deliberately does not do:
   aim, so the review workflow around it stays a person's decision.
 - Frigate's API port 5000 is never published. nginx reaches it on the internal
   Docker network as `frigate:5000`, and go2rtc as `frigate:1984`. The retention
-  container's gateway is reached as `retention:8090`, on the same
-  internal network, with no published port of its own.
+  container's gateway is reached as `retention:8090`, and the experimental
+  fighting sidecar as `fighting:8091`, both on the same internal network and both
+  with no published port of their own. No raw Frigate stats, config, logs or frame
+  bytes reach the browser through the fighting route: it serves one status
+  document and nothing else.
 
 Zones are drawn in Frigate's own UI, not here. The dashboard does not link to it:
 open `127.0.0.1:8971` directly to draw zones or browse older archives.
@@ -454,11 +465,18 @@ anyone in view while armed, because their monitored area is the whole frame.
 - **Home** keeps no person snapshot on Cameras 1–3. **Away** arms all three at one
   moment, in one write. Switching any single camera yourself overrides a preset,
   and the status reads **Custom** while they disagree.
+- **Home and a disarm stop armed person-presence review, and only that.** They do
+  **not** turn everything off: Camera 4's area_4 stays armed, the animal rule on
+  Cameras 1–3 keeps running with no arming needed, and the
+  [possible-fighting watch](#possible-fighting-experimental) keeps running on
+  Cameras 2 and 3 whatever these controls say. Three separate things keep
+  snapshots here; the page names all three wherever a disarm could be read as a
+  total stop.
 - **Turning review off from Away is confirmed**, in the same native dialog the
-  deletion uses: *Disarm Camera N?* or *Switch to Home?*, naming what stops and that
-  Camera 4 stays armed. **Cancel and Escape send nothing** and leave every setting
+  deletion uses: *Disarm Camera N?* or *Switch to Home?*, naming exactly what stops
+  and what carries on. **Cancel and Escape send nothing** and leave every setting
   as it was. Arming a camera, and leaving Home, are never confirmed. Snapshots
-  already kept are untouched either way, and animals stay monitored on Cameras 1–3.
+  already kept are untouched either way.
 - **Your choice is saved**, in one small JSON file on the named volume
   (`--state-file`, default `/state/entry.json`) holding three flags and three
   timestamps and nothing else. A restart comes back as you left it; a fresh
@@ -483,9 +501,11 @@ anyone in view while armed, because their monitored area is the whole frame.
   restricted polygon person-only at `loitering_time: 0` for Cameras 1 and 4, and
   person among the labels it already carries for the full-frame areas on Cameras 2
   and 3. The worker reads `/api/config` internally and keeps four booleans.
-- **There is no fighting, behaviour or anomaly detection in this repository**, so
-  nothing here assesses risk, intent or conflict. Nothing infers a direction of
-  travel or identifies a person.
+- **Arming here assesses no risk, intent or conflict.** Nothing infers a direction
+  of travel, identifies a person, or scores danger. The one separate model in this
+  repository is the experimental possible-fighting watch, it is not part of this
+  rule, and it is not a finding either; see
+  [Possible fighting](#possible-fighting-experimental).
 
 See [`docs/restricted-zone.md`](docs/restricted-zone.md) for the commented zone
 example and the arming details, and
@@ -538,10 +558,70 @@ before it sees them. Anything it did pin keeps growing until it is deleted by
 hand. There is no cap, and no automatic expiry - that is the point of keeping
 evidence.
 
-**Not implemented, and not implied anywhere:** any behaviour, anomaly, fighting or
-classification detection. The object model is COCO 91 and there is no such class
-in it. Nothing in this repository infers a direction of travel, identifies a
-person, or scores risk.
+## Possible fighting (experimental)
+
+One separate, explicitly **experimental** model exists, and it answers exactly one
+narrow question. It is not part of the rules above, it is not armed by them, and it
+cannot be switched off from anywhere.
+
+`scripts/fighting.py` runs as its own container with **no published port**. It looks
+at the whole frame of two rooms - **Camera 2** (monitored area 2) and **Camera 3**
+(area_3) - at 3 FPS, in memory, and asks one small local video model whether a
+16-frame window looks violent. **Two consecutive windows** on one camera at or above
+a threshold confirm an interval, and every Frigate `person` event overlapping that
+interval gets the native sub-label **`possible_fighting`** and is **kept
+indefinitely**. Cameras 2 and 3 only, whatever anybody has armed.
+
+**What it is not, and this is the whole point.**
+
+- **It is not a finding.** `possible_fighting` is a possibility a model reported.
+  A hug, a dance and a fight can look the same to it.
+- **Its accuracy has not been measured on these two rooms.** No precision, recall,
+  false-positive rate or confidence figure exists anywhere in this repository, and
+  none may be quoted. The threshold is a number somebody chose, not a calibrated
+  one. A person has to look at every snapshot it labels.
+- **An inference timing is not an accuracy.** Timings taken on this host are
+  timings and nothing more; they are not a score and not a confidence.
+- **It has nothing to do with weapons, intent, identity or anomaly.** Nothing here
+  says a weapon was present, who anybody is, who started anything, or whether
+  anything unusual happened at all beyond what one small model said about sixteen
+  frames.
+
+**Three lifetimes, not one.** An ordinary snapshot is kept **six hours**. A snapshot
+kept by armed person review or by the animal rule is kept **until a person deletes
+it**, as is one the fighting watch labels. All three are the same Frigate flag
+(`retain_indefinitely`) and the same cleanup that skips it, so *Kept for review* on
+the dashboard means the flag and only the flag.
+
+**The model is pinned and provisioned from outside.** Weights come from a local
+mounted directory only (`local_files_only`, safetensors, no remote code, **no
+download at runtime**), at one pinned revision of one MIT-licensed model. Nothing
+is trained here, and the model file is gitignored.
+
+**What the browser may see of it: one safe read.** `GET /api/activity/fighting`
+proxies the sidecar's own read-only `/status` and nothing else of it: one exact
+path, a fixed upstream URI, **no forwarded client query**, no CORS, and the server's
+own 4 s timeouts. The upstream is a variable so Docker's resolver, not nginx's
+start-time lookup, resolves `fighting:8091`, so **the dashboard still starts and
+still serves everything else when the sidecar is absent**. Every other
+`/api/activity` path is 404. The page checks the status field by field and shows
+**Monitoring** only when the model is ready, that camera is analysing, and its
+capture and score are recent; a loading model, a refused model, no frames, and
+stale data all read as Starting or Unavailable. The page has **no control** over
+this watch, and the status carries no frame, path, score or credential.
+
+**Rows.** A labelled snapshot carries **Possible fighting activity** in the row's own
+tag row and in the viewer caption, read from the camera service's `sub_label` and
+never inferred from the camera or the armed state. The kept filter is
+`retain_indefinitely` and nothing else, so that label can never widen what *Kept for
+review* means.
+
+The sidecar is authorised to do exactly two things, both on events that already
+exist: write that sub-label, and set the retain flag. It never deletes, never
+un-pins, never edits configuration and never creates an event. **The browser's two
+writes are unchanged**: the reviewed deletion and the entry arming.
+
+Full model and runtime detail: [`docs/fighting.md`](docs/fighting.md).
 
 ## Animals
 
@@ -697,11 +777,18 @@ python3 scripts/check.py --base http://127.0.0.1:8088   # or $ZONE_CONSOLE_URL
 ```
 
 It exercises the proxy trust boundary over HTTP: the UI and its security
-headers, a list of paths that must be denied including go2rtc's own, write
+headers, a list of paths that must be denied including go2rtc's own and every
+`/api/activity` path except the one fighting read, write
 methods that must be refused, the pinned stats shape against override attempts,
 the bundled player module and the absence of any credential-bearing `rtsp://`
-URL in what is served, real event snapshots, and that settled zone snapshots
-arrive flagged kept. With Frigate down it **fails**, rather than passing a skipped
+URL in what is served, real event snapshots, that settled zone snapshots
+arrive flagged kept, the `kept` review scope and its refusals, a query on the
+delete path being refused, and the experimental fighting status route: its core
+shape, that no query is forwarded, that only GET and HEAD answer, and that it
+carries no path, credential, media URL or frame. It reports **`NOT READY`**, never
+a pass, when the fighting model is loading or refused or when no room is being
+monitored, so a clean run cannot be read as a working model. With Frigate down it
+**fails**, rather than passing a skipped
 check: an unreachable camera service is not a passed validation.
 
 It is a transport check. It never opens a WebSocket, so it **cannot** prove a
@@ -741,6 +828,9 @@ There is no CI workflow in this repository.
   example, which camera watches which area, and what arming does and does not say.
 - [`docs/evaluation.md`](docs/evaluation.md) - the accuracy protocol, and the two
   empty CSV templates it is recorded in.
+- [`docs/fighting.md`](docs/fighting.md) - the experimental possible-fighting model:
+  the pinned revision, how it is provisioned, and what its label does and does not
+  mean.
 
 ## Known limitations
 
@@ -756,9 +846,16 @@ fixed by it.
   Camera 4's area_4 approach are boundary questions a zone cannot answer; that
   needs an ordered track across frames, which does not exist here.
 - **Family is not distinguishable.** One class, `person`.
-- **There is no fighting, behaviour or anomaly detection**, and none is
-  approximated by this. Camera 2 and Camera 3 keep anyone in view while they are
-  armed, because their area is the whole frame - presence, not an incident.
+- **The possible-fighting watch has no measured accuracy on these two rooms**, and
+  that is the limitation, not a footnote. It is a possibility a model reported, its
+  threshold is a chosen number, and no false-positive rate, precision, recall or
+  confidence figure exists for it anywhere. Two systems may read it as either kind
+  of behaviour, and both would be kept for a person to look at. Inference timings
+  have been taken on this host and they are timings, not accuracy.
+- **There is no weapon, intent, identity or anomaly detection anywhere**, and the
+  COCO 91 object detector has no such class. Camera 2 and Camera 3 keep anyone in
+  view while they are armed, because their area is the whole frame - presence, not
+  an incident.
 - **An entry already under way when you arm can be missed** on Cameras 1–3, because
   a track has one start time. Camera 4 has no arming moment and no such boundary.
 - **Arming survives a restart now**, which the old "every restart comes back

@@ -15,8 +15,15 @@ The `expected` column is that person's ground truth. Without it, only precision
 can be looked at, and half of the question stays unasked.
 
 Detection here is `person` and the ten COCO 91 animal classes at 352×288 and 3
-fps. It does not tell family from anyone else, and it has no fighting, behaviour
-or anomaly class at all. Do not score those; there is nothing to score.
+fps. It does not tell family from anyone else, and it has no behaviour or anomaly
+class at all. Do not score those against this protocol; there is nothing here to
+score.
+
+**The experimental possible-fighting watch is outside this protocol and must not be
+scored with it.** It is a separate two-class video model on cameras 2 and 3, and
+its accuracy is **unmeasured**; `docs/fighting.md` owns how any evaluation of it
+would have to be set up. Nothing in the CSVs below refers to
+`possible_fighting`, and a labelled snapshot in the archive is not a trial.
 
 ## Record first, score later
 

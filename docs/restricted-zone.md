@@ -130,13 +130,21 @@ is always. Nothing more.
 - **Not an identity.** The detector reports one class, `person`. It cannot tell
   family from anyone else, and nothing in this repository attempts to.
 - **Not a risk score.** No threat, no intent, no risk.
-- **Not a fight or behaviour detector.** There is no such model here. The object
-  model is COCO 91, and it has no class for a fight, a scuffle or anything
-  similar. Cameras 2 and 3 are the monitored area 2 and the area_3, internal views whose
+- **Not a fight or behaviour detector.** The object model here is COCO 91, and it
+  has no class for a fight, a scuffle or anything similar: a zone cannot produce
+  one. Cameras 2 and 3 are the monitored area 2 and the area_3, internal views whose
   monitored area is the whole frame, so arming one of them keeps **every person in
-  view** for as long as it stays armed - presence, not an incident. Nothing about
-  their contents is assessed by anything in this repository, and that is a deliberate
-  limit of what the zone can say, not a judgement about the room.
+  view** for as long as it stays armed - presence, not an incident, and a
+  deliberate limit of what the zone can say.
+- **But a kept snapshot is no longer only ever a zone candidate.** A separate,
+  explicitly **experimental** sidecar watches cameras 2 and 3 for
+  `possible_fighting` and keeps what it labels, on its own authority and whatever
+  the arming above says. That label is **a possibility a model reported about
+  sixteen frames, never a finding**, its accuracy on these two rooms is
+  **unmeasured**, and it says nothing about direction, identity, intent or a
+  weapon. It is a separate system with its own documentation
+  ([`fighting.md`](fighting.md)), and arming or disarming above neither starts nor
+  stops it. What this file describes is the zone rule only.
 
 ## The animals, unchanged
 
