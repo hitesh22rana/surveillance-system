@@ -11,8 +11,8 @@ each main channel serves HEVC 2560×1440 at 25 fps, and all four players were
 watched running full-resolution video in a browser before and after the Frigate
 restart that applied the six-hour snapshot window. The expanded
 `scripts/check.py` suite passes every assertion, against the deployed gateway as
-well as before it. The 60-second loitering zones are **loaded and confirmed** in
-native `/api/config`, and the controlled deletion gateway is **deployed and
+well as before it. The earlier 60-second loitering zones have been removed; see the
+current policy below. The controlled deletion gateway is **deployed and
 exercised**: `scripts/check_retention.py` and `scripts/check_console_api.py` both
 PASS against a disposable fake upstream, and one ended experimental snapshot was
 deleted through the dashboard on the owner's explicit authorisation. What is still
@@ -20,6 +20,23 @@ unverified is the detection work itself: a controlled zone walkthrough, accuracy
 measurement, night behaviour, and alert timing — and, on retention, an actual
 six-hour expiry, a retained event followed past six hours, and the CLI deletion
 path. See [`validation.md`](validation.md) for exactly what was and was not run.
+
+## Current policy — 2026-10-02 update
+
+This update supersedes the earlier 60-second loitering requirements below. Those
+zones have been removed. Camera 4 always watches its area_4 restricted zone;
+Camera 1 watches the monitored area 1 while manually armed. Camera 2 is the monitored area 2
+and Camera 3 is the area_3: while armed, each keeps person events in its existing
+full-frame area. Home disarms Cameras 1–3; Away arms them together; individual
+changes produce Custom when their settings differ. Camera 4 cannot be disarmed.
+Manual settings persist across service restarts.
+
+While Away is active, the dashboard asks for confirmation before disarming one
+camera or switching to Home. Cancel and Escape preserve the settings. Animal
+monitoring on Cameras 1–3 continues independently of arming. Ordinary snapshots
+retain the six-hour window; kept snapshots remain until manually deleted. These
+rules preserve review candidates, and do not identify intent, family members,
+fighting or weapons. Live detection accuracy still requires controlled evaluation.
 
 ## What is actually known
 

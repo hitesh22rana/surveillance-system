@@ -23,10 +23,11 @@ and never report a pass that was not actually observed.
 
 The dashboard is read-only by construction, with two authorised exceptions the
 owner asked for: controlled manual deletion of reviewed snapshots, and manual
-arming of entry review on `camera_1` and `camera_4`. Keep everything else that
-way. The proxy still pins the upstream stats key allowlist server-side, and no
-credential, log, config or restart path is reachable from the browser. The only
-writes are in `scripts/retain.py --serve`, both behind their own refusals.
+arming of person monitoring on `camera_1`, `camera_2` and `camera_3`. Keep
+everything else that way. The proxy still pins the upstream stats key allowlist
+server-side, and no credential, log, config or restart path is reachable from the
+browser. The only writes are in `scripts/retain.py --serve`, both behind their
+own refusals.
 
 `POST /api/snapshots/delete` is irreversible and answers the reviewed-deletion
 call behind the dashboard's exact Host, an Origin equal to that Host, a JSON
@@ -34,20 +35,32 @@ content type, `X-Surveillance-Action: delete`, and a body validated before any
 upstream request. It is the only path that can destroy anything.
 
 `POST /api/security/entry` is the arming write: exactly
-`{"camera":"camera_1"|"camera_4","armed":true|false}`, behind the same Host,
-Origin and content-type refusals plus `X-Surveillance-Action: arm-entry`. It
-writes nothing upstream and edits no configuration — it flips a flag in the
-worker's memory that decides what a later poll pass may keep, on those two
-cameras only, and it never unpins and never deletes. It reads Frigate's
-`/api/config` internally to learn whether the expected zone exists, but only two
-booleans per camera ever leave that route; no config, URL, camera or raw error is
-forwarded to the browser. The 60-second full-frame person rule is removed on every
-camera and records kept under it stay exactly as they are.
+`{"camera":"camera_1"|"camera_2"|"camera_3","armed":true|false}` or exactly
+`{"mode":"home"|"away"}`, behind the same Host, Origin and content-type refusals
+plus `X-Surveillance-Action: arm-entry`. It writes nothing upstream and edits no
+configuration — it saves three flags and three timestamps in one small JSON file
+and flips what a later poll pass may keep. It reads the camera service's
+`/api/config` internally to learn whether the zone that camera needs exists, but
+only booleans per camera ever leave that route; no config, URL, camera, file path
+or raw error is forwarded to the browser. `camera_4` is armed internally from
+startup: it is not in the saved file, so no request and no writable file can
+disable it, and both Home and Away leave it alone. The 60-second full-frame person
+rule is removed on every camera and records kept under it stay exactly as they
+are.
+
+Arming is a person's decision made on the dashboard and it is now durable, so the
+older "every restart comes back disarmed" rule no longer holds for cameras 1–3;
+what still holds is that a fresh installation is Home, that there is no
+command-line route to arm anything, and that arming is never automatic. A file
+this cannot read falls back to Home and says so rather than guessing Away, and a
+camera whose area is not confirmed stops pinning without losing its setting or the
+moment it was armed.
 
 Both published ports stay on loopback, and the gateway publishes no port at all —
 nginx reaches it on the internal network only. Deletion is never automatic: the
 poll loop contains no `DELETE` and never will. Arming is never automatic either:
-it is disarmed on every restart and there is no command-line route to arm it.
+it is a person's decision, and camera_4's is fixed in this process rather than
+in any file.
 
 Destructive validation is allowed when the owner authorises it explicitly, which
 he did on 2026-10-02 for one experimental snapshot; the earlier blanket

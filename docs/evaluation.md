@@ -60,25 +60,28 @@ zero, and is never printed as zero.
 
 ## Two rules, and they are never scored in the same run
 
-The same walk-through is a **positive** under one rule and a **negative** under the
-other, so "the family trials" cannot be called negatives without saying which rule
+The same walk-through is a **positive** under one rule and a **negative** under
+the other, so "the family trials" cannot be called negatives without saying which rule
 is being scored. There are two rules, and they are run as separate CSV runs:
 
 - **Object detection — was a person on camera detected at all?** Every observed
   crossing counts, anywhere in the view: `expected: 1`, and `detected` says whether
   a snapshot came out. Family crossing the kitchen is a **positive** trial here.
-- **Entry review — was somebody inside the armed restricted area kept?** Only
-  crossings of `camera_1_restricted` or `camera_4_restricted`, and only while that
-  camera is armed. An ordinary family crossing that stays **outside** the restricted
-  area is `expected: 0`; a crossing **into** the armed restricted area is
-  `expected: 1`. Arming is by hand, so each of these rows is recorded with the arm
-  window it was scored in, and the watched-quiet windows for that camera belong to
-  this run rather than to the other one.
+- **Person review — was a person inside a watched area kept?** Only crossings of
+  the area that camera's Arm control watches — `camera_1_restricted`,
+  `camera_2_area`, `camera_3_area`, and `camera_4_restricted` on camera_4, which is
+  always armed and needs no arming window. An ordinary family crossing that stays
+  **outside** that area is `expected: 0`; a crossing **into** it is `expected: 1`.
+  On Cameras 2 and 3 the area is the whole frame, so every crossing of the room is
+  in it and the `expected: 0` rows for those two cameras come only from an unarmed
+  window. Arming is by hand, so each of these rows is recorded with the arm window
+  it was scored in, and the watched-quiet windows for that camera belong to this
+  run rather than to the other one.
 
 Keep two sets of files and score them separately, with the rule named in the run
 notes for each. `false_alerts` follows the rule being evaluated rather than the
 archive: an animal pinned on sight on `camera_1` … `camera_3` is not a false alert
-for the entry-review rule, and an ordinary family snapshot is not a false alert for
+for the person-review rule, and an ordinary family snapshot is not a false alert for
 the object-detection rule. One number for both rules is one meaningless number.
 
 ## What to run
@@ -88,17 +91,17 @@ as its own run:
 
 - **ordinary family walk-through** — people crossing the view on their way
   somewhere. For **object detection** these are positives: `expected: 1`, and
-  `detected` says what happened. For **entry review** the same people are
-  negatives **only while they stay outside the armed restricted area**
-  (`expected: 0`) — and an ordinary crossing that produces a kept candidate means
-  the armed area is too big.
-- **monitored boundary, Camera 1** — entering from the left of the floor. This is an
-  **entry review** trial, `expected: 1`. Record it, but understand what the tool can
+  `detected` says what happened. For **person review** the same people are
+  negatives **only while they stay outside the armed area** (`expected: 0`) — and
+  on Cameras 2 and 3, whose area is the whole frame, an ordinary crossing *while
+  they are armed* is a kept candidate: presence, not an entry, and recorded as such.
+- **monitored boundary, Camera 1** — entering from the left of the floor. This is a
+  **person review** trial, `expected: 1`. Record it, but understand what the tool can
   answer: a zone says somebody was inside it. Which side of the boundary they came
   from needs an ordered track across frames, and there is none here.
 - **area_4 approach, Camera 4** — entering the area_4 area within the configured boundary.
-  Also an **entry review** trial, `expected: 1`. Same limit: presence in the zone is
-  a candidate for review, not a finding.
+  Also a **person review** trial, `expected: 1`, and the one camera that needs no
+  arming. Same limit: presence in the zone is a candidate for review, not a finding.
 - **day and night** — every trial twice, once each. Night is where this is
   expected to be worst, and it is the one most often skipped.
 - **animals on cameras 1–3** — a dog, a cat, a bird. They are pinned on sight,
