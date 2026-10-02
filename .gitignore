@@ -1,0 +1,16 @@
+# Local secrets — only .env.example is tracked
+.env
+!.env.example
+
+# Runtime config — only config.example.yml is tracked
+config/*
+!config/config.example.yml
+
+# Media, logs, and runtime artifacts
+storage/
+media/
+logs/
+*.log
+captures/
+*.mp4
+*.jpg
