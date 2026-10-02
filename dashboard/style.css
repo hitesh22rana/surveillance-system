@@ -1,4 +1,4 @@
-/* Surveillance console — a dark monitoring workspace.
+/* Surveillance console - a dark monitoring workspace.
  *
  * Section rhythm is one value, card padding is one value, and the only boxes on
  * the page are the ones that hold a control or a picture. Motion is press
@@ -273,7 +273,7 @@ a {
 
 /* Destructive: an outline that says so at the point of choice. A pointer that
  * merely crosses it dims it a little, after a beat, and never fills it or
- * changes its hue — the two buttons that do either would flash a decision back
+ * changes its hue - the two buttons that do either would flash a decision back
  * at someone whose cursor was on its way somewhere else. */
 .btn--danger:not([disabled]) {
   background: transparent;
@@ -345,8 +345,8 @@ a {
 
 /* The card is one always-open, non-modal <dialog> that is styled into the grid
  * rather than laid over it. Everything the user agent would do to a dialog is
- * undone here — position, margin, padding, border, surface, and the open dialog's
- * own size ceilings — so at rest it is only a column of block boxes. Only
+ * undone here - position, margin, padding, border, surface, and the open dialog's
+ * own size ceilings - so at rest it is only a column of block boxes. Only
  * :modal changes anything structural. */
 .feed__panel {
   position: static;
@@ -769,7 +769,7 @@ a {
 }
 
 /* An outcome is a sentence, not a value in a table. Out of the flow when empty
- * so it claims none of the gaps, but never display:none — a live region that is
+ * so it claims none of the gaps, but never display:none - a live region that is
  * display:none is not announced when it refills. */
 .result {
   min-height: 1lh;

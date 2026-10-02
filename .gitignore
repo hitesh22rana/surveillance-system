@@ -1,8 +1,8 @@
-# Local secrets — only .env.example is tracked
+# Local secrets - only .env.example is tracked
 .env
 !.env.example
 
-# Runtime config — only config.example.yml is tracked
+# Runtime config - only config.example.yml is tracked
 config/*
 !config/config.example.yml
 

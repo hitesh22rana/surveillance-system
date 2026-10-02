@@ -9,7 +9,7 @@ this repository, and the first person to run this will be the first.
 **The saved snapshots cannot show you what was missed.** Frigate only writes a
 snapshot for something it detected, so the archive is by construction a list of
 hits. A person who walked past every camera and was never detected leaves no
-trace in it — no row, no absence, nothing. Measuring recall therefore needs a
+trace in it - no row, no absence, nothing. Measuring recall therefore needs a
 second, independent record: somebody standing there, writing down what they saw.
 The `expected` column is that person's ground truth. Without it, only precision
 can be looked at, and half of the question stays unasked.
@@ -34,7 +34,7 @@ with the file, line and column, and the run prints nothing rather than scoring
 half a file. `python3 scripts/evaluate.py --self-check` proves the counting and
 the refusals against disposable files of its own.
 
-## trials.csv — one row per observed crossing
+## trials.csv - one row per observed crossing
 
 `camera,lighting,expected,detected`, with `camera` one of `camera_1` …
 `camera_4`, `lighting` exactly `day` or `night`, and `expected` and `detected`
@@ -44,18 +44,18 @@ suite produced, including no snapshot at all.
 `lighting` is what it was like at the time, not what the clock says. A dusk
 crossing is `day` or `night` by whether the frame needed the lights.
 
-## windows.csv — one row per stretch of watched quiet
+## windows.csv - one row per stretch of watched quiet
 
 `camera,lighting,hours,false_alerts`, `hours` a finite positive number and
 `false_alerts` a non-negative whole number.
 
 This is the file that cannot be derived. An empty stage looks exactly like a
-missed object, so "no trials" is not "no false alerts" — it is nobody looking.
+missed object, so "no trials" is not "no false alerts" - it is nobody looking.
 A window is a period you watched a camera with nobody deliberately in it, and
 `false_alerts` is what the suite produced during that time.
 
 The rate is `false_alerts ÷ hours`, per camera-hour. With no windows file, or no
-rows for a group, it prints **`unmeasured`** — which is a different thing from
+rows for a group, it prints **`unmeasured`** - which is a different thing from
 zero, and is never printed as zero.
 
 ## Two rules, and they are never scored in the same run
@@ -64,11 +64,11 @@ The same walk-through is a **positive** under one rule and a **negative** under
 the other, so "the family trials" cannot be called negatives without saying which rule
 is being scored. There are two rules, and they are run as separate CSV runs:
 
-- **Object detection — was a person on camera detected at all?** Every observed
+- **Object detection - was a person on camera detected at all?** Every observed
   crossing counts, anywhere in the view: `expected: 1`, and `detected` says whether
   a snapshot came out. Family crossing the kitchen is a **positive** trial here.
-- **Person review — was a person inside a watched area kept?** Only crossings of
-  the area that camera's Arm control watches — `camera_1_restricted`,
+- **Person review - was a person inside a watched area kept?** Only crossings of
+  the area that camera's Arm control watches - `camera_1_restricted`,
   `camera_2_area`, `camera_3_area`, and `camera_4_restricted` on camera_4, which is
   always armed and needs no arming window. An ordinary family crossing that stays
   **outside** that area is `expected: 0`; a crossing **into** it is `expected: 1`.
@@ -89,22 +89,22 @@ the object-detection rule. One number for both rules is one meaningless number.
 Each of these separately, per camera, in daylight and at night, and each scored
 as its own run:
 
-- **ordinary family walk-through** — people crossing the view on their way
+- **ordinary family walk-through** - people crossing the view on their way
   somewhere. For **object detection** these are positives: `expected: 1`, and
   `detected` says what happened. For **person review** the same people are
-  negatives **only while they stay outside the armed area** (`expected: 0`) — and
+  negatives **only while they stay outside the armed area** (`expected: 0`) - and
   on Cameras 2 and 3, whose area is the whole frame, an ordinary crossing *while
   they are armed* is a kept candidate: presence, not an entry, and recorded as such.
-- **monitored boundary, Camera 1** — entering from the left of the floor. This is a
+- **monitored boundary, Camera 1** - entering from the left of the floor. This is a
   **person review** trial, `expected: 1`. Record it, but understand what the tool can
   answer: a zone says somebody was inside it. Which side of the boundary they came
   from needs an ordered track across frames, and there is none here.
-- **area_4 approach, Camera 4** — entering the area_4 area within the configured boundary.
+- **area_4 approach, Camera 4** - entering the area_4 area within the configured boundary.
   Also a **person review** trial, `expected: 1`, and the one camera that needs no
   arming. Same limit: presence in the zone is a candidate for review, not a finding.
-- **day and night** — every trial twice, once each. Night is where this is
+- **day and night** - every trial twice, once each. Night is where this is
   expected to be worst, and it is the one most often skipped.
-- **animals on cameras 1–3** — a dog, a cat, a bird. They are pinned on sight,
+- **animals on cameras 1–3** - a dog, a cat, a bird. They are pinned on sight,
   so a false positive here is **permanent** until somebody deletes it. Record how
   many arrive per hour.
 - **camera_4** is person-only and must stay a negative for every animal class.
@@ -122,7 +122,7 @@ anything else are not combinable: two rules scored together are one meaningless
 number. The report says so at the top of every run.
 
 Precision and recall come out of staged observations of scenes somebody watched.
-They are **not deployment precision** — they describe those scenes in that
+They are **not deployment precision** - they describe those scenes in that
 lighting, with that geometry, on that day.
 
 ## Recorded results

@@ -4,7 +4,7 @@
 retain.py --serve is the only write path in this project, so this drives the real
 gateway over HTTP exactly as the dashboard's browser drives it: Host, Origin,
 Content-Type and X-Surveillance-Action written by hand, against a fake Frigate on
-loopback. It adds no seam to production code — --api-base and --listen are the
+loopback. It adds no seam to production code - --api-base and --listen are the
 operational settings compose and a test pass on the command line, and everything
 else the gateway does has a default.
 
@@ -150,7 +150,7 @@ def gateway(base, interval=60, page_size=PAGE_SIZE, max_pages=50, state_file=Non
         # The first poll pass owns the upstream until it runs to its end: it reads pages
         # and POSTs pins of its own throughout. Every case below asserts that the upstream
         # saw no further call, so it cannot capture a baseline until the pass that is
-        # still writing has logged its own end — waiting on its first read would take the
+        # still writing has logged its own end - waiting on its first read would take the
         # baseline in the middle of a walk that goes on to post pins.
         while not pass_finished(output):
             if time.time() > deadline:
@@ -768,12 +768,12 @@ def check_poll_never_deletes():
 
 
 def entry_state(port):
-    """The arming status, over the real path, with no action header — it is a read.
+    """The arming status, over the real path, with no action header - it is a read.
 
     Every field is checked, because a reply this page cannot read is a status it does not
     have: shown as unavailable rather than filled in with a guess. The mode has to agree
     with the three flags it is derived from, camera_4 has to be armed with no moment, and
-    the three manual cameras must agree with themselves — armed with a moment, or off with
+    the three manual cameras must agree with themselves - armed with a moment, or off with
     none.
     """
     status, _headers, body = call(port, "GET", retain.ENTRY_PATH, origin=None, action=None)
@@ -884,9 +884,9 @@ def check_entry_write_refusals():
                         f"arming with {name} answered HTTP {status} instead of refusing: {body!r}"
                 assert entry_state(port)["mode"] == "home", \
                     "arming with a query string or a path suffix changed the state anyway"
-                print(f"ok  {len(refusals) + 2} refusal shapes on the arming POST — foreign Host, "
+                print(f"ok  {len(refusals) + 2} refusal shapes on the arming POST - foreign Host, "
                       "missing or foreign Origin, https Origin, wrong or absent content type, the "
-                      "delete action header, no action header, a query string and a path suffix — "
+                      "delete action header, no action header, a query string and a path suffix - "
                       "each refused with the state unchanged")
 
                 # Bodies, before any of them can arm anything.
@@ -921,10 +921,10 @@ def check_entry_write_refusals():
                     assert state["state"][retain.ALWAYS_CAMERA]["armed"] is True, \
                         f"a body naming {name} reached camera_4"
                 assert not path.exists(), f"a refused body wrote {path.read_text()}"
-                print(f"ok  {len(bodies)} bodies refused with HTTP 400 or 413 — camera_4 armed and "
+                print(f"ok  {len(bodies)} bodies refused with HTTP 400 or 413 - camera_4 armed and "
                       "disarmed, an unknown camera, a missing key, a third key, a string or numeric "
                       "armed, an unknown or numeric mode, both shapes at once, neither shape, four "
-                      "wrong JSON types and an oversized body — each before anything could be armed")
+                      "wrong JSON types and an oversized body - each before anything could be armed")
 
                 # The one preset that works with nothing configured, and the one camera that
                 # can be armed, so what follows is measured against a state that moved.
@@ -1141,7 +1141,7 @@ def check_entry_ready_gating():
                 assert recovered["mode"] == "away", "Away did not take after recovery"
                 print("ok  with nothing readable every arming and Away is refused with 409, the "
                       "settings and the mode survive untouched, disarming and Home still work, and "
-                      "one missing area gates only its own camera — then Away works by itself once "
+                      "one missing area gates only its own camera - then Away works by itself once "
                       "the areas are reported again")
 
 

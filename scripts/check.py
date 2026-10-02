@@ -134,7 +134,7 @@ def main():
 
     # The snapshot reads are exact paths. Every DENIED entry is asserted denied
     # against the live server a few lines below, so an allowed read that drifted
-    # into that list would fail there — this names that requirement instead of
+    # into that list would fail there - this names that requirement instead of
     # leaving it to a future editor to rediscover.
     assert not {SUMMARY_PATH, EVENTS_PATH} & set(DENIED), \
         "an allowed snapshot read is in the deny list"

@@ -24,14 +24,14 @@
 #
 # Cameras 2 and 3 need no second zone at all: the `camera_N_area` above is already
 # what their Arm control watches, and it lists person among the animal classes these
-# two cameras track, so arming one of them keeps anyone in view — presence, not an
+# two cameras track, so arming one of them keeps anyone in view - presence, not an
 # entry.
 #
 # What arming does and does not mean. While armed, a person inside that camera's
 # area has their snapshot kept for review. That is a candidate for a person to
 # look at. It is not a judgement: this model reports one class, person, so it
 # cannot tell family from anyone else, and a zone cannot say which side of a
-# boundary somebody came from — that needs an ordered track across frames, which
+# boundary somebody came from - that needs an ordered track across frames, which
 # is not built. Nothing here scores risk or intent, and nothing here detects a
 # fight: the object model is COCO 91, and it has no class for one.
 #
@@ -125,7 +125,7 @@ cameras:
       camera_1_area:
         # Deliberate default: every part of this view counts, so no area is
         # silently unwatched. loitering_time 0 means no tracked-presence
-        # requirement at all — this zone is the snapshot trigger, not a rule.
+        # requirement at all - this zone is the snapshot trigger, not a rule.
         coordinates: "0,0,1,0,1,1,0,1"
         inertia: 3
         loitering_time: 0
@@ -163,7 +163,7 @@ cameras:
         # 6 hours, in days, for everything the worker has not pinned. Short on
         # purpose: the retention worker pins the events it is allowed to, and a
         # long window here would just hide an event the worker never saw.
-        # Snapshots pinned under an older rule are NOT released by this — those
+        # Snapshots pinned under an older rule are NOT released by this - those
         # stay until a person deletes them, so only newly captured ordinary
         # snapshots are on this timer.
         default: 0.25
@@ -199,7 +199,7 @@ cameras:
       camera_2_area:
         # Deliberate default: every part of this view counts, so no area is
         # silently unwatched. loitering_time 0 means no tracked-presence
-        # requirement at all — this zone is the snapshot trigger, not a rule.
+        # requirement at all - this zone is the snapshot trigger, not a rule.
         coordinates: "0,0,1,0,1,1,0,1"
         inertia: 3
         loitering_time: 0
@@ -259,7 +259,7 @@ cameras:
       camera_3_area:
         # Deliberate default: every part of this view counts, so no area is
         # silently unwatched. loitering_time 0 means no tracked-presence
-        # requirement at all — this zone is the snapshot trigger, not a rule.
+        # requirement at all - this zone is the snapshot trigger, not a rule.
         coordinates: "0,0,1,0,1,1,0,1"
         inertia: 3
         loitering_time: 0
@@ -308,7 +308,7 @@ cameras:
       camera_4_area:
         # Deliberate default: every part of this view counts, so no area is
         # silently unwatched. loitering_time 0 means no tracked-presence
-        # requirement at all — this zone is the snapshot trigger, not a rule.
+        # requirement at all - this zone is the snapshot trigger, not a rule.
         coordinates: "0,0,1,0,1,1,0,1"
         inertia: 3
         loitering_time: 0

@@ -1,4 +1,4 @@
-/* Surveillance console — live view of four cameras, with manual snapshot review.
+/* Surveillance console - live view of four cameras, with manual snapshot review.
  *
  * Rules this file follows on purpose:
  *   - Every value shown is read from the camera service or counted from what it
@@ -110,7 +110,7 @@
    * always armed and has no control at all. Both bodies below are the same fixed path
    * the worker validates: {"mode":"home"|"away"} for the two presets, and
    * {"camera":"camera_1"|"camera_2"|"camera_3","armed":bool} for one camera. Neither
-   * touches a camera, a zone or a configuration — the worker saves the setting in one
+   * touches a camera, a zone or a configuration - the worker saves the setting in one
    * file and the status line says out loud that Camera 4 cannot be turned off. */
   const ENTRY_CAMERAS = Object.freeze(["camera_1", "camera_2", "camera_3"]);
   const ALWAYS_CAMERA = "camera_4";
@@ -141,8 +141,8 @@
   const TIMEOUT_MS = 4000; // per live request, below the proxy's own timeout
   const STATS_STALE_MS = 20000; // an older stats sample is not current state
 
-  /* Counting a real total means walking the archive, so both archive reads — the
-   * count behind the archive-wide delete and the page walk behind the pager —
+  /* Counting a real total means walking the archive, so both archive reads - the
+   * count behind the archive-wide delete and the page walk behind the pager -
    * are given the same 60 s the proxy gives them rather than the 4 s a live read
    * gets. A walk that outlives its window is reported, never read as an empty
    * archive. */
@@ -150,7 +150,7 @@
 
   /* The delete is the one request allowed a long answer: the proxy gives it the
    * same 60 s and this page gives up at that same finite moment. There is no
-   * retry — a delete that may already have happened is never sent twice. */
+   * retry - a delete that may already have happened is never sent twice. */
   const DELETE_TIMEOUT_MS = 60000;
 
   /* The worker's own ceiling on one id list, so the page stops at it rather than
@@ -800,7 +800,7 @@
      * connection down when it reads as not visible, so hiding it while it is
      * still starting would stop it before a frame could ever arrive. Instead the
      * frame goes dark under the placeholder, which is opaque, sits over the
-     * blank video and carries the reason — so a missing or frozen picture is
+     * blank video and carries the reason - so a missing or frozen picture is
      * never left on screen reading as live. */
     setShown(card.placeholder, !live.playing);
     card.frame.dataset.video = live.playing ? "on" : "off";
@@ -815,7 +815,7 @@
         "last frame " + clockTime(card.live.lastFrameAt) +
         " · " + Math.round((Date.now() - card.live.lastFrameAt) / 1000) + " s ago";
     } else {
-      card.stamp.textContent = card.live.state === "starting" ? "no frame yet" : "—";
+      card.stamp.textContent = card.live.state === "starting" ? "no frame yet" : "-";
     }
   }
 
@@ -829,7 +829,7 @@
    * open, so this one is closed and reopened as the same element: the frame, the
    * <video> and the go2rtc element inside it keep the identical parent they have
    * at rest. Nothing is cloned, re-parented or re-created, so the main stream is
-   * the one session that was already open — not a second one, and not a dropped
+   * the one session that was already open - not a second one, and not a dropped
    * one. Only the presentation and the top layer change. */
   function expandCard(card, opener) {
     if (!card.panel || card.expanded) return;
@@ -895,7 +895,7 @@
       if (card && liveStatus(card).playing) playing += 1;
       const detector = detectorStatus(camera, state.sample);
       if (detector.detecting) detecting += 1;
-      rates.push(detector.process === null ? "—" : detector.process.toFixed(1));
+      rates.push(detector.process === null ? "-" : detector.process.toFixed(1));
     }
 
     el.statLive.textContent = playing + " of " + CAMERAS.length + " playing";
@@ -904,8 +904,8 @@
     el.statDetectRate.textContent = rates.join(" · ");
 
     if (!state.sample) {
-      el.statInference.textContent = "—";
-      el.statAge.textContent = state.statsStale ? "out of date" : "—";
+      el.statInference.textContent = "-";
+      el.statAge.textContent = state.statsStale ? "out of date" : "-";
       return;
     }
 
@@ -919,12 +919,12 @@
         if (ms !== null) parts.push(Math.round(ms) + " ms");
       }
     }
-    el.statInference.textContent = parts.length ? parts.join(" · ") : "—";
+    el.statInference.textContent = parts.length ? parts.join(" · ") : "-";
 
     const seconds = state.statsAge;
     el.statAge.textContent =
       seconds === null
-        ? "—"
+        ? "-"
         : seconds * 1000 > STATS_STALE_MS
           ? "out of date"
           : seconds + " s";
@@ -932,9 +932,9 @@
 
   /* -------------------------------------------------------------- events -- */
 
-  /* The archive is the worker's own set — a saved person snapshot on a
+  /* The archive is the worker's own set - a saved person snapshot on a
    * configured camera, which is exactly the set the archive-wide delete counts
-   * and reaches — so it is listed as it answers and never re-filtered here.
+   * and reaches - so it is listed as it answers and never re-filtered here.
    * A second filter in this file could only hide rows the total still counts,
    * which is how a page ends up claiming a range it is not showing. The one
    * guard kept is the id: it is the only field that becomes a delete body. */
@@ -954,7 +954,7 @@
     const list = Array.isArray(event.zones) ? event.zones : [];
     /* Configured zone names never reach the page: the area is stated in words, and
      * so is a restricted area. The two suffix tests cover the zones this file has
-     * no entry for too — a restricted area on a camera that must not have one, and
+     * no entry for too - a restricted area on a camera that must not have one, and
      * the old camera_N_loitering name, which older rows in the archive still carry
      * and which no longer means anything. */
     const named = list.filter(
@@ -968,7 +968,7 @@
     /* An animal row has to say which animal it was. It is pinned on sight, so it
      * carries no restricted zone, and until it does the zone text is the only line
      * on the row that can name it: a held row that reads only "Monitored area"
-     * says a camera saw something, not what. A person row is unchanged — "person"
+     * says a camera saw something, not what. A person row is unchanged - "person"
      * is the only class it ever carries, so naming it would be noise. */
     return isAnimal(event) ? classLabel(event) + " · " + area : area;
   };
@@ -1112,7 +1112,7 @@
       // entry" for a person whose own camera's restricted area carried them, and
       // nothing at all for every other row. A person is never tagged here for
       // duration of presence, another camera's zone is not an entry on this one,
-      // and an animal is not an entry — none of which says anything about intent.
+      // and an animal is not an entry - none of which says anything about intent.
       const flag = node.querySelector(".event__flag");
       setShown(flag, inRestrictedZone(event));
       if (inRestrictedZone(event)) flag.textContent = RESTRICTED_LABEL;
@@ -1426,7 +1426,7 @@
    * Every field is checked, because a reply it cannot read is a status it does not
    * have: shown as unavailable rather than filled in with a guess. armed and
    * armed_since have to agree, so an "armed with no moment" or a "disarmed with one"
-   * shape is refused — except on the always-armed camera, which is exactly armed
+   * shape is refused - except on the always-armed camera, which is exactly armed
    * with no moment of its own. The mode has to agree with the three flags it is
    * derived from, so a reply that contradicts itself is not half-believed either. */
   function usableEntry(payload) {
@@ -1481,8 +1481,8 @@
      * write and is holding the controls shut itself.
      *
      * A read that would be discarded on return is not sent at all. While a write
-     * is in flight an ordinary GET cannot change anything — its answer is thrown
-     * away — so the request is not made: the service is not asked to answer a
+     * is in flight an ordinary GET cannot change anything - its answer is thrown
+     * away - so the request is not made: the service is not asked to answer a
      * question whose answer cannot be used, and the arming POST is left the only
      * thing in flight. The epoch guard stays for the read already on the wire
      * when the write starts, which nothing here can call back. */
@@ -1599,7 +1599,7 @@
 
   /* What the operator asked for, in words. Named before the request is sent and used
    * only once the service has confirmed it, so it can never stand in for an answer.
-   * It says what is being kept — a person inside a watched area — and never anything
+   * It says what is being kept - a person inside a watched area - and never anything
    * about who, which way, or what it meant. */
   function entryOutcomeText(body) {
     if (!body.camera) {
@@ -1811,8 +1811,8 @@
     sendEntry(body);
   }
 
-  /* Confirm sends the captured body through the guarded path — never back through
-   * askEntry, so a confirmed change cannot open another confirmation — and never
+  /* Confirm sends the captured body through the guarded path - never back through
+   * askEntry, so a confirmed change cannot open another confirmation - and never
    * twice: the intent is dropped before the request is made. */
   function confirmEntry() {
     const body = entryIntent;
@@ -2018,7 +2018,7 @@
 
     // The list is re-read rather than patched: only the service knows what is
     // left, and new snapshots may have been written on the way. This is a read,
-    // so it can fail without anything having been sent a second time — the POST
+    // so it can fail without anything having been sent a second time - the POST
     // above is the only one, whether or not this one answers.
     const refreshed = await readEvents();
 
@@ -2282,7 +2282,7 @@
       /* The worker's own page number is adopted, which is how a page that has just
        * been deleted out from under the operator is clamped to the last one, and
        * how a deep link past the end of a shorter archive lands on a real page.
-       * The URL is corrected to the page that was actually read — and by
+       * The URL is corrected to the page that was actually read - and by
        * replacement rather than by a push, because the operator did not ask for
        * this page and it is not a step in the history they walked here. */
       state.page = parsed.page;
@@ -2503,7 +2503,7 @@
   /* Page and camera are the two things an operator navigates by, so both live in
    * the query string: a deep link has to survive a reload, and the back button has
    * to step back through the pages somebody actually read. Nothing else is written
-   * there — the archive is read-only apart from the one delete above, and a URL is
+   * there - the archive is read-only apart from the one delete above, and a URL is
    * not a place to keep anything else.
    *
    * This is the initial parse, and it deliberately does not clamp to the page
@@ -2527,7 +2527,7 @@
   /* Canonical: the page is written only when it is not the first, and the camera
    * only when it is not all, so the common case is a bare path and no two
    * navigations ever produce two spellings of the same view. Every other parameter
-   * and the fragment are left exactly as they were found — this page did not put
+   * and the fragment are left exactly as they were found - this page did not put
    * them there and does not get to clean them up. A push is a move the operator
    * asked for; a replace is the same view being described more accurately. */
   function writeUrlState(push) {
@@ -2601,8 +2601,8 @@
   });
 
   /* Back and Forward are navigation, not a poll: they restore the page and the
-   * camera the URL names and read that page. Nothing is pushed — the entry being
-   * restored is already on the stack — and a read that was already in flight is
+   * camera the URL names and read that page. Nothing is pushed - the entry being
+   * restored is already on the stack - and a read that was already in flight is
    * dropped by the generation counter in readEvents rather than answering a page
    * the operator has already walked away from.
    *

@@ -17,11 +17,11 @@ exercised**: `scripts/check_retention.py` and `scripts/check_console_api.py` bot
 PASS against a disposable fake upstream, and one ended experimental snapshot was
 deleted through the dashboard on the owner's explicit authorisation. What is still
 unverified is the detection work itself: a controlled zone walkthrough, accuracy
-measurement, night behaviour, and alert timing — and, on retention, an actual
+measurement, night behaviour, and alert timing - and, on retention, an actual
 six-hour expiry, a retained event followed past six hours, and the CLI deletion
 path. See [`validation.md`](validation.md) for exactly what was and was not run.
 
-## Current policy — 2026-10-02 update
+## Current policy - 2026-10-02 update
 
 This update supersedes the earlier 60-second loitering requirements below. Those
 zones have been removed. Camera 4 always watches its area_4 restricted zone;
@@ -91,13 +91,13 @@ fighting or weapons. Live detection accuracy still requires controlled evaluatio
   that cleanup skips. The example zones are the full frame, so any tracked person
   who stays in view for a minute qualifies; that is a geometry prototype, not a
   judgement about risk, and it is **narrowing the polygons that remains to be
-  done**. Both lifetimes are Frigate's own bookkeeping — go2rtc restreams and
+  done**. Both lifetimes are Frigate's own bookkeeping - go2rtc restreams and
   keeps nothing. The worker's boundary behaviour is verified against a fake
   Frigate, and its pinning was **observed on the live stack under the previous
   single-zone rule** (49 pinned plus 27 already retained across 76 events; a later
   pass found all 76 already retained and exited 0). Under the two-zone rule, one
   naturally completed loitering snapshot was seen pinned and three new ordinary
-  snapshots not pinned — one observation each way, not a rate. **No six-hour
+  snapshots not pinned - one observation each way, not a rate. **No six-hour
   expiry has been waited out**, no retained event has been confirmed to survive
   past six hours, and the CLI deletion path has not been run against a real event.
 - **The dashboard has exactly one write path, and the owner authorised it.**
@@ -111,7 +111,7 @@ fighting or weapons. Live detection accuracy still requires controlled evaluatio
   content type, an action header, and full body validation before any upstream
   request. Deletion is **never automatic**: the poll loop contains no `DELETE`.
 
-## Phase 1 — one camera, one zone, person loitering
+## Phase 1 - one camera, one zone, person loitering
 
 Superseded twice over. The original single-camera `courtyard` configuration is
 replaced by the four-camera layout below, and the single full-frame zone is
@@ -119,14 +119,14 @@ replaced by two per camera. The detection rules carried over unchanged per camer
 apart from the presence threshold, which is now 60 seconds and not 3.
 
 - One zone per camera, `objects: [person]`.
-- `loitering_time: 3` — tracked in-zone presence of 3 seconds.
-- `inertia: 3` — 3 consecutive frames inside the zone are required.
+- `loitering_time: 3` - tracked in-zone presence of 3 seconds.
+- `inertia: 3` - 3 consecutive frames inside the zone are required.
 - Alerts gated on `required_zones: [<that camera's zone>]` so events elsewhere in
   frame do not create alerts.
 - Snapshots on, timestamped, bounding box drawn, gated on the same zone.
 - `record.enabled: false`. MQTT disabled. No notification provider.
 
-## Phase 2 — four cameras and a read-only console
+## Phase 2 - four cameras and a read-only console
 
 Implemented in this repository, with one authorised exception to the read-only
 part, recorded under **Phase 2b**. **Accepted: no.** The code exists; the exit
@@ -146,7 +146,7 @@ conditions below have not been met.
 - The example polygon for every zone is the full frame `0,0,1,0,1,1,0,1`. This
   is a deliberate whole-view default: every view is covered, at the cost of more
   events than you want to read. A full-frame *loitering* zone is worse than a
-  full-frame area zone — it fires on anybody who waits for a door — so narrowing
+  full-frame area zone - it fires on anybody who waits for a door - so narrowing
   is the first thing to do, natively, once the scene is known.
 - **60 seconds is a geometry prototype, not a danger judgement.** It is a timer
   chosen so that a passing step does not qualify and a shift-longer presence
@@ -170,7 +170,7 @@ conditions below have not been met.
   `/api/events/<native-id>/snapshot.jpg`, where the id is Frigate's own
   `<frame_time>-<rand_id>` tracker form. The reads are `GET` and `HEAD` only, and
   every other `/api` path is denied.
-- `/api/events` keeps a **fixed 50-row upstream URI** — people only,
+- `/api/events` keeps a **fixed 50-row upstream URI** - people only,
   snapshot-bearing, all four cameras, all four area zones. That **50 is the
   legacy endpoint's shape, not the size of the archive**; it is kept for
   compatibility, and the dashboard reads the paginated source below instead,
@@ -179,7 +179,7 @@ conditions below have not been met.
   player (`/video-rtc.js`), and `/live/camera_1` … `/live/camera_4` are WebSocket
   upgrades, each naming one main stream with no query string at all. go2rtc's own
   config, stream list and control WebSocket are not proxied, and there is no
-  generic `/live/` path — a fifth camera, or any suffix on a camera path, is a
+  generic `/live/` path - a fifth camera, or any suffix on a camera path, is a
   404 rather than a different stream.
 - **The console's only write is the reviewed-deletion `POST` described in Phase
   2b.** Everything it shows it can otherwise only read. There is no config, log,
@@ -217,8 +217,8 @@ conditions below have not been met.
   days) for everything ordinary, deleted by Frigate's periodic cleanup. Because
   that cleanup runs about every five minutes, six hours is the cutoff an ordinary
   snapshot is measured against, not the minute it disappears.
-- `scripts/retain.py` pins qualifying events — `person`, snapshot-bearing, in
-  **that camera's loitering** zone — by setting Frigate's own
+- `scripts/retain.py` pins qualifying events - `person`, snapshot-bearing, in
+  **that camera's loitering** zone - by setting Frigate's own
   `retain_indefinitely` every 30 seconds. It holds no state of its own, so a
   restart neither re-pins nor forgets. An ordinary walk-through, which carries
   only the area zone, is **not** pinned and ages out on the six-hour timer.
@@ -239,7 +239,7 @@ conditions below have not been met.
   zones, **every tracked person who stays in view for a minute is retained until a
   person deletes it.** Disk growth is bounded by review, not by a timer, and there
   is no cap. If the worker is stopped longer than the six-hour window, events it
-  never saw can be cleaned up first — which is why the worker has to be watched
+  never saw can be cleaned up first - which is why the worker has to be watched
   running, not just written.
 
 **Latency target: 5 seconds from loiter qualification to a visible alert.** A
@@ -276,7 +276,7 @@ rain, or when the host is loaded.
   differ.
 - `scripts/check.py` passes against the live stack, with its Frigate-dependent
   checks actually run rather than skipped. **Met 2026-10-02**: every assertion in
-  the expanded script holds — all four cameras detecting, the 11 forbidden paths
+  the expanded script holds - all four cameras detecting, the 11 forbidden paths
   refused, `POST`/`DELETE` refused on `/api/stats` and `/live/camera_1`,
   `media-src 'self' blob:`, the player module served 200, no credentials in the
   three served assets, the stats allowlist held plain and against an override, 50
@@ -290,7 +290,7 @@ rain, or when the host is loaded.
   ran against the live stack and pinned 49 of 76 qualifying events, a later pass
   found all 76 already retained and exited 0, and a pass after the Frigate
   restart found 78 already retained and exited 0, so pinning and not pinning
-  twice are observed on real events — under the **previous single-zone rule**.
+  twice are observed on real events - under the **previous single-zone rule**.
   Under the two-zone rule, one naturally completed loitering snapshot was observed
   pinned and three new ordinary snapshots observed not pinned: one in each
   direction, not a rate. What is still not met: a genuine service restart with a
@@ -299,7 +299,7 @@ rain, or when the host is loaded.
 - Both zones per camera are drawn, and the two on each camera describe the same
   place. **Not done:** all eight polygons are still the full frame.
 
-## Phase 2b — controlled manual deletion
+## Phase 2b - controlled manual deletion
 
 Implemented, **deployed and exercised**, on 2026-10-02. Recorded separately
 because it is the one place the console is not read-only, and the owner authorised
@@ -324,7 +324,7 @@ it explicitly.
   blank parameter, a page that is not a positive whole number, or a camera that is
   not `all` or one of the four configured names is refused before any upstream
   request. It answers `{"events": [...], "page": <int>, "page_size": 25,
-  "total": <int>, "pages": <int>}` — **25 rows per page**, newest first, with the
+  "total": <int>, "pages": <int>}` - **25 rows per page**, newest first, with the
   camera filter applied **before** the page is cut, so `total` and `pages` always
   describe the filtered set. A page past the last is clamped to the last rather
   than refused, because a page that is one behind after deletions still needs an
@@ -333,12 +333,12 @@ it explicitly.
   like a whole one.
 - `POST /api/snapshots/delete` accepts **either** `{"ids": [<native id>, ...]}`
   (1 to 1000, non-empty, duplicates folded) **or** `{"all": true, "before":
-  <the summary cutoff>}` — never both, never neither, and no other key. It
+  <the summary cutoff>}` - never both, never neither, and no other key. It
   answers `{"deleted": <int>, "missing": <int>, "failed": [<id>, ...],
   "active": <int>}`, and the three counts always add up to what was selected.
 - **`all` is fail-closed.** The whole archive is walked first, from the beginning
-  of time, and if the walk cannot reach the end of the list — the page cap, an
-  upstream failure, a malformed page — **nothing is deleted at all** and the
+  of time, and if the walk cannot reach the end of the list - the page cap, an
+  upstream failure, a malformed page - **nothing is deleted at all** and the
   request answers 503. `before` is applied locally after the walk, so the newest
   events are excluded by this code rather than by an upstream bound that could
   drift between the count and the deletion.
@@ -363,7 +363,7 @@ it explicitly.
   on Frigate and must be a configured camera's, must carry a snapshot and must be
   a `person`; another camera's event is refused, not deleted. 404 counts as
   already gone, so a repeat is idempotent. A native 2xx carrying `success: false`
-  is never counted as a deletion — both the status and the body must say so.
+  is never counted as a deletion - both the status and the body must say so.
 - **Active detections are reported, not managed.** `active` counts selected
   events Frigate has not ended yet; those can write a new snapshot afterwards.
   Nothing here restarts a camera, and nothing here deletes in a loop. Deletion
@@ -392,7 +392,7 @@ CLI delete path, and any sign-off. The phase stays unaccepted because a
 destructive path that has been exercised once is not the same as a phase meeting
 every exit condition.
 
-## Phase 3 — email snapshot alerts
+## Phase 3 - email snapshot alerts
 
 Not started. No notifications exist today. When this phase begins, the design is:
 
@@ -418,7 +418,7 @@ Not started. No notifications exist today. When this phase begins, the design is
 **Exit condition:** a deliberate flood scenario produces a bounded number of
 messages, and killing the network mid-send does not produce a runaway retry.
 
-## Phase 4 — remote access
+## Phase 4 - remote access
 
 Last, and only after notifications are proven.
 
@@ -434,15 +434,15 @@ the plan.
 - Access logs are reviewed after go-live. If nobody can say who looked at the
   footage, that is a finding.
 
-## Next phase — activity-based detection (not started)
+## Next phase - activity-based detection (not started)
 
-The rule that exists today — a `person` reaching **60 seconds of tracked
-in-zone presence** in a full-frame zone — is a presence counter, and it
+The rule that exists today - a `person` reaching **60 seconds of tracked
+in-zone presence** in a full-frame zone - is a presence counter, and it
 **assesses no risk at all**: with the example polygons it means "somebody was on
 camera for a minute". It **measures nothing about how the object behaved**: not
 whether it moved, not whether it left and came back, and not intent. Whether it
-excludes an ordinary crossing is **unmeasured** — no controlled walkthrough has been
-run — so no claim either way is recorded here. The owner's stated direction for
+excludes an ordinary crossing is **unmeasured** - no controlled walkthrough has been
+run - so no claim either way is recorded here. The owner's stated direction for
 what comes next is activity-based suspicious detection, covering activity that
 suggests weapons or harm. That is a design direction recorded here, **not a built
 feature**: no model has been selected, evaluated, or trained, and nothing in this
@@ -450,7 +450,7 @@ repository implements it.
 
 What such a phase would have to define before any of it counts: zones narrowed
 from the full frame to the actual areas of interest, the hours it applies,
-persistence thresholds, and temporal evidence rather than a single frame —
+persistence thresholds, and temporal evidence rather than a single frame -
 suspicion is a sequence, not a still. Output would be a labelled
 "worth reviewing" signal with the evidence a person checks, so validation is a
 **labelled review set plus manual human review**, never an automatic threat
@@ -470,8 +470,8 @@ classification rule and added none.
   expiry** and are removed only by a person, by hand or through the controlled
   deletion. With the default full-frame loitering zones that is anyone whose
   tracked presence in view reaches a minute. Nobody reviewing means the disk fills,
-  and a full disk takes the host down, detection included. Ordinary events —
-  anything that did not loiter, plus anything the worker never saw — age out
+  and a full disk takes the host down, detection included. Ordinary events -
+  anything that did not loiter, plus anything the worker never saw - age out
   instead, at the
   first cleanup pass after they pass six hours. Snapshots already pinned under the
   previous whole-frame rule are still on disk and are **not** released by this
@@ -495,7 +495,7 @@ classification rule and added none.
   actually holds is narrower and worth keeping: a request is refused before any
   upstream request is made, and the person still has to confirm the scope. A bug
   or a future edit that loosens one of those checks is a data-loss bug.
-  `scripts/check_console_api.py` is the guard, and it **passes** (2026-10-02) —
+  `scripts/check_console_api.py` is the guard, and it **passes** (2026-10-02) -
   which is a statement about a disposable upstream, not a live one.
 - **The worker is a single point of evidence loss.** Nothing pins zone events but
   a 30-second poll. Stopped or crash-looping longer than the six-hour window, it
@@ -553,8 +553,8 @@ classification rule and added none.
   neutral names until physical cameras are assigned.
 - Acceptance criterion, per camera: tracked presence in that camera's loitering
   zone reaching sixty seconds, at any hour. **Revised 2026-10-02** from three
-  seconds. Whether that excludes an ordinary crossing is **unmeasured** — no
-  controlled walkthrough has been run — so it is recorded as a target, not a
+  seconds. Whether that excludes an ordinary crossing is **unmeasured** - no
+  controlled walkthrough has been run - so it is recorded as a target, not a
   verified behaviour.
 - Live view is the camera's own main channel, un-re-encoded, with no quality
   ladder: full resolution or an explicit "this browser cannot decode HEVC".
@@ -573,7 +573,7 @@ classification rule and added none.
   unreachable by anything but the dashboard's own origin. **Revised again
   2026-10-02:** it may now be exercised on the owner's explicit authorisation, and
   one ended experimental snapshot was deleted that way. The safeguards are
-  unchanged and are not negotiable — exact Host, matching Origin, JSON content
+  unchanged and are not negotiable - exact Host, matching Origin, JSON content
   type, action header, full validation before any upstream request, and a person
   deciding to do it.
 - Only "a person loitering in a named zone" is detected. No behaviour, anomaly or

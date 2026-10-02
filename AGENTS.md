@@ -7,6 +7,18 @@ This project-specific preference supersedes the user's global branch/PR workflow
 Always sign every Git commit and verify the signature before pushing.
 Do not monitor CI after pushing unless explicitly requested.
 
+Write no em dashes in anything you add to this repository. Not in prose or
+Markdown, not in UI copy, labels, placeholders or empty-value glyphs, not in
+code comments, docstrings or printed check output, and not in config comments.
+Use a plain ASCII hyphen with the surrounding spacing preserved, or restructure
+the sentence. En dashes are fine where a range or a numeric span is meant
+(`camera_1` through `camera_3` reads as `1–3`), as are minus operators and
+structural delimiters. The whole tree was swept clean of every representation of
+the em dash on 2026-10-02: the character itself, the named and decimal and hex
+HTML entities, and the backslash-u escape used in JavaScript and Python string
+literals. A new one is a regression rather than a style choice, and
+`git ls-files` plus a byte scan of those representations is the check.
+
 Delegate all implementation work to the locally installed OpenCode running
 `opencode/space-bunny-free` (Space Bunny Free) at `--variant max`, which is the
 preferred effort level for every delegated run. Codex does not write the code
@@ -38,7 +50,7 @@ upstream request. It is the only path that can destroy anything.
 `{"camera":"camera_1"|"camera_2"|"camera_3","armed":true|false}` or exactly
 `{"mode":"home"|"away"}`, behind the same Host, Origin and content-type refusals
 plus `X-Surveillance-Action: arm-entry`. It writes nothing upstream and edits no
-configuration — it saves three flags and three timestamps in one small JSON file
+configuration - it saves three flags and three timestamps in one small JSON file
 and flips what a later poll pass may keep. It reads the camera service's
 `/api/config` internally to learn whether the zone that camera needs exists, but
 only booleans per camera ever leave that route; no config, URL, camera, file path
@@ -56,7 +68,7 @@ this cannot read falls back to Home and says so rather than guessing Away, and a
 camera whose area is not confirmed stops pinning without losing its setting or the
 moment it was armed.
 
-Both published ports stay on loopback, and the gateway publishes no port at all —
+Both published ports stay on loopback, and the gateway publishes no port at all -
 nginx reaches it on the internal network only. Deletion is never automatic: the
 poll loop contains no `DELETE` and never will. Arming is never automatic either:
 it is a person's decision, and camera_4's is fixed in this process rather than

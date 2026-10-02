@@ -21,7 +21,7 @@ Those settings are saved, so a restart comes back as they were and a fresh insta
 comes back Home. One small JSON file in the one writable volume holds three flags and
 three timestamps and nothing else: no credential, no configuration, no upstream body.
 It is written atomically, a write that does not land changes nothing here and is
-reported as a failure, and a file that cannot be read is never guessed away from — it
+reported as a failure, and a file that cannot be read is never guessed away from - it
 is Home, with the controls shown as unavailable.
 
 Arming reaches forwards on those three and never backwards: an event that began
@@ -49,8 +49,8 @@ upstream: each endpoint builds its own upstream call from literals, validated id
 and validated filters.
 
 A camera may be armed only when Frigate's own /api/config reports the zone that
-camera needs — person-only on the two restricted polygons, and carrying person on the
-full-frame areas camera_2 and camera_3 already track their animals in — at
+camera needs - person-only on the two restricted polygons, and carrying person on the
+full-frame areas camera_2 and camera_3 already track their animals in - at
 loitering_time 0. That read is refreshed on a timer and after any change, is parsed
 only into booleans, and is never forwarded to the browser: the config carries RTSP
 URLs with credentials, so nothing from it but four true-or-false answers is ever
@@ -206,9 +206,9 @@ def read_desired(path):
     """(desired, error): the saved manual settings, validated field by field.
 
     A missing file is a fresh installation, not an error. Anything else this cannot
-    read — not JSON, not this shape, a version that is not this version, a camera that
+    read - not JSON, not this shape, a version that is not this version, a camera that
     is neither armed nor off, a timestamp that is not a number, a fourth camera that is
-    not one of the three manual ones — is Home with everything manual off and
+    not one of the three manual ones - is Home with everything manual off and
     STATE_UNREADABLE beside it. The direction to fall back in is the one that keeps
     nothing.
 
@@ -315,7 +315,7 @@ class EntryState:
     def notice(self):
         """The one paragraph the dashboard shows: what is always armed, what the two
         presets do, and what the saved setting is allowed to be. Appended to that, only
-        when it is true, is the one thing that went wrong reading the file — never the
+        when it is true, is the one thing that went wrong reading the file - never the
         path and never the exception. Desired against effective is on the rows."""
         text = ("Camera 4's area_4 is always armed. Home disarms Cameras 1-3; Away arms "
                 "them. Settings survive restarts. Tracks already underway when 1-3 are "
@@ -641,8 +641,8 @@ def pin_disqualification(event, entry, now):
     """Why this event must not be pinned, or None if it qualifies.
 
     A person is pinned only when all of these hold: that camera's entry review is
-    armed right now, the event carries the zone that camera watches, and — for the
-    three cameras a person arms by hand — the event started at or after the
+    armed right now, the event carries the zone that camera watches, and - for the
+    three cameras a person arms by hand - the event started at or after the
     armed_since of the arming that let it through. A 60-second full-frame presence
     pins nothing any more, on any camera.
 
@@ -1086,7 +1086,7 @@ def delete_plan(body, now):
 
 
 class Gateway(http.server.BaseHTTPRequestHandler):
-    """Four endpoints — summary, events, delete and entry — and a refusal for
+    """Four endpoints - summary, events, delete and entry - and a refusal for
     everything else.
 
     The Host is checked on each, because the browser only ever reaches this

@@ -9,7 +9,7 @@ full-frame placeholder cannot end up armed by accident. Camera 1's is armed by
 hand; **Camera 4's area_4 area is always armed** and has no control at all.
 
 Cameras 2 and 3 have no restricted area and never will. Their monitored area is the
-whole frame — the monitored area 2 on Camera 2, the area_3 on Camera 3 — so arming one
+whole frame - the monitored area 2 on Camera 2, the area_3 on Camera 3 - so arming one
 of them means "keep a person while they are in view" rather than "keep a crossing".
 Nothing about that is a judgement of the room.
 
@@ -35,7 +35,7 @@ yourself overrides a preset, and the status reads *Custom* while they disagree. 
 mode is derived from the three flags, never set independently.
 
 **Turning review off is confirmed, and only from Away.** From Away the only changes
-on offer are ones that stop keeping people — one camera, or the whole set — so the
+on offer are ones that stop keeping people - one camera, or the whole set - so the
 page asks first, in the same native dialog and the same classes as the deletion
 confirmation: *Disarm Camera 2?* or *Switch to Home?*, naming what stops and that
 Camera 4 stays armed. Cancel and Escape send nothing at all and leave every setting
@@ -54,9 +54,9 @@ same with its own name.
       camera_1_restricted:
         # Person only, and no dwell. loitering_time 0 means an event carries this
         # zone as soon as inertia is met, so crossing the line is the whole event
-        # rather than a timer — which is what separates this from the 60 second
+        # rather than a timer - which is what separates this from the 60 second
         # rule that was removed.
-        coordinates: "0,0,1,0,1,1,0,1"   # PLACEHOLDER — replace with the real floor boundary
+        coordinates: "0,0,1,0,1,1,0,1"   # PLACEHOLDER - replace with the real floor boundary
         inertia: 3
         loitering_time: 0
         objects:
@@ -75,7 +75,7 @@ would fire on every person on every frame regardless of any of this.
 ## Manual arming, and only that
 
 Manual arming is the chosen design for cameras 1–3. Arming and disarming go
-through the dashboard's controlled API only — `POST /api/security/entry`, behind
+through the dashboard's controlled API only - `POST /api/security/entry`, behind
 the same Host, Origin, content-type and action-header refusals as the delete. There
 is no schedule, no arming from a detector signal, and no command-line route to set
 the flag.
@@ -83,7 +83,7 @@ the flag.
 - **Your choice is saved, in one small file.** `--state-file`, default
   `/state/entry.json`, in the one writable named volume; the container's root
   filesystem stays read-only. It holds three flags and three timestamps and
-  nothing else — no credential, no configuration, no upstream body — under a
+  nothing else - no credential, no configuration, no upstream body - under a
   deliberate 4 KiB ceiling, written and flushed beside itself and then renamed
   over it. A restart comes back as you left it, and a fresh installation comes
   back Home.
@@ -96,7 +96,7 @@ the flag.
   with every manual camera off, the dashboard told the setting could not be read,
   and camera 4 still armed. The direction to fall back in is the one that keeps
   nothing.
-- **A camera can only be armed once the camera service reports its area** — the
+- **A camera can only be armed once the camera service reports its area** - the
   restricted polygon person-only at `loitering_time: 0` for cameras 1 and 4, and
   person among the labels it already carries at `loitering_time: 0` for the
   full-frame areas on cameras 2 and 3. The worker reads `/api/config` for that and
@@ -134,7 +134,7 @@ is always. Nothing more.
   model is COCO 91, and it has no class for a fight, a scuffle or anything
   similar. Cameras 2 and 3 are the monitored area 2 and the area_3, internal views whose
   monitored area is the whole frame, so arming one of them keeps **every person in
-  view** for as long as it stays armed — presence, not an incident. Nothing about
+  view** for as long as it stays armed - presence, not an incident. Nothing about
   their contents is assessed by anything in this repository, and that is a deliberate
   limit of what the zone can say, not a judgement about the room.
 
@@ -144,4 +144,4 @@ is always. Nothing more.
 an animal **on sight**, with no arming involved. `camera_4` still tracks
 `person` and nothing else, and the worker still refuses an animal event on it
 without consulting the camera service. Because that pin is immediate, an animal
-false positive is permanent — see [`evaluation.md`](evaluation.md).
+false positive is permanent - see [`evaluation.md`](evaluation.md).

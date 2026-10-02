@@ -3,7 +3,7 @@
 
 The confirmation is the only thing between an acknowledged Away and an unreviewed
 disarm, and it is browser code: a native <dialog>, the form that closes it, and one
-guarded request. So this drives the page's own functions rather than a copy of them —
+guarded request. So this drives the page's own functions rather than a copy of them -
 they are lifted out of app.js by name, evaluated with the page's state replaced by
 mocks, and asked the questions that matter: which changes ask, that Cancel and Escape
 write nothing, that Confirm writes exactly once, and that an unreadable status, a busy

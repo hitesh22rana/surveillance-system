@@ -1,4 +1,4 @@
-/* Surveillance console — design tokens.
+/* Surveillance console - design tokens.
  *
  * One neutral charcoal family for every surface, one restrained blue for
  * interaction, and three status colours that are only ever shown beside a word.
@@ -45,10 +45,10 @@
   --font-num: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
 
-  --text-xs: 0.75rem; /* 12px — metadata */
-  --text-sm: 0.8125rem; /* 13px — secondary metadata */
-  --text-control: 0.875rem; /* 14px — every control label */
-  --text-base: 1rem; /* 16px — body floor */
+  --text-xs: 0.75rem; /* 12px - metadata */
+  --text-sm: 0.8125rem; /* 13px - secondary metadata */
+  --text-control: 0.875rem; /* 14px - every control label */
+  --text-base: 1rem; /* 16px - body floor */
   --text-md: 1.0625rem;
   --text-lg: 1.25rem;
 

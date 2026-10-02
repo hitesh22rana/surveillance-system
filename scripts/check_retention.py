@@ -14,8 +14,8 @@ Rows are Frigate-shaped: the singular label, the boolean has_snapshot, a list of
 zones, and a native "<stamp>-<6 lowercase alphanumerics>" id. Filtering=False is
 the one departure, and it is what makes the worker's own label and snapshot
 checks reachable. Its /api/config carries the full-frame camera_N_area on all four
-cameras — person plus all ten animal classes on cameras 1-3, as the running
-instance reports — and the person-only restricted polygon on camera_1 and
+cameras - person plus all ten animal classes on cameras 1-3, as the running
+instance reports - and the person-only restricted polygon on camera_1 and
 camera_4. The single-event GET, the delete that removes the row and the retain
 body are here for scripts/check_console_api.py, which drives the gateway against
 this same imitation rather than a second one.
@@ -157,7 +157,7 @@ def entry_fixture(armed_at):
     time, so the boundary is the only variable.
 
     Rows before armed_at are inside the pass's six hour lookback, so each one is refused
-    for being old rather than for being unread — but only on cameras 1-3. camera_4 has
+    for being old rather than for being unread - but only on cameras 1-3. camera_4 has
     no arming moment and no start-time boundary at all, so the same shape on camera_4 is
     kept: an entry already under way is a candidate there. Every tag is exactly six
     lowercase alphanumerics, or the row would be counted as unaddressable instead of
@@ -313,8 +313,8 @@ class FakeFrigate:
             self.post_bodies.append(body)
             attempts = self.attempts.get(event_id, 0) + 1
             self.attempts[event_id] = attempts
-            # Both refusals are transient upstream conditions — a locked database
-            # and a rolled-back transaction — so each one is refused on the first
+            # Both refusals are transient upstream conditions - a locked database
+            # and a rolled-back transaction - so each one is refused on the first
             # attempt only and the next pass gets through.
             if event_id in self.refusals and attempts == 1:
                 return self.refusals[event_id], b'{"error": "database is locked"}'
@@ -809,8 +809,8 @@ def check_arming_needs_a_configured_zone():
                 assert fake.config_reads >= 1, "readiness never read the config at all"
                 assert state.snapshot()["camera_4"]["armed"] is True, \
                     "the always-armed camera followed the config"
-        print(f"ok  {label}: every camera reads not ready, so nothing is pinned for people — "
-              "including camera_4 — while camera_4's own armed flag is unaffected and the "
+        print(f"ok  {label}: every camera reads not ready, so nothing is pinned for people - "
+              "including camera_4 - while camera_4's own armed flag is unaffected and the "
               "answer came from the camera service's own config")
 
 
