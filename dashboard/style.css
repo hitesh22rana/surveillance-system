@@ -44,6 +44,7 @@ body {
 
 h1,
 h2,
+h3,
 p,
 dl,
 dd,
@@ -76,10 +77,12 @@ a {
   text-underline-offset: 2px;
 }
 
+/* The ring is drawn, not animated, and it takes the shape of whatever is
+ * focused: forcing one radius on every control made chips, buttons and cards
+ * share a ring they do not own. */
 :focus-visible {
   outline: 2px solid var(--color-focus);
   outline-offset: 2px;
-  border-radius: var(--radius-sm);
 }
 
 ::selection {
@@ -135,18 +138,20 @@ a {
 /* ------------------------------------------------------------ layout ----- */
 
 #main {
-  padding: var(--space-xl) clamp(1rem, 4vw, 2.5rem);
+  padding: var(--space-lg) clamp(1rem, 4vw, 2.5rem);
   padding-inline: max(clamp(1rem, 4vw, 2.5rem), env(safe-area-inset-left));
-  padding-bottom: max(var(--space-xl), env(safe-area-inset-bottom));
+  padding-bottom: max(var(--space-lg), env(safe-area-inset-bottom));
   display: flex;
   flex-direction: column;
-  gap: var(--space-2xl);
+  gap: var(--space-xl);
 }
 
+/* One rhythm inside a section. Dense enough that a poll landing in a fifty-row
+ * list is not a scroll away from the controls that act on it. */
 .section {
   display: flex;
   flex-direction: column;
-  gap: var(--space-lg);
+  gap: var(--space-md);
   max-width: 78rem;
 }
 
@@ -156,12 +161,17 @@ a {
   max-width: 62ch;
 }
 
+/* One step below the page title. At the same size as it, two headings competed
+ * for the top of the page and the section lost. */
 .section__title {
-  font-size: var(--text-xl);
+  font-size: var(--text-lg);
 }
 
+/* The page title has to outrank the section titles. The display step is not a
+ * token this stylesheet can count on, and without a fallback the h1 fell back to
+ * inherited body size and rendered smaller than the h2s under it. */
 h1.section__title {
-  font-size: var(--text-display);
+  font-size: var(--text-display, var(--text-xl));
   margin-block: var(--space-3xs) var(--space-xs);
 }
 
@@ -173,10 +183,20 @@ h1.section__title {
   text-transform: uppercase;
 }
 
+/* Operational prose, not UI copy: a measure of about 65 characters and the body
+ * leading, so a paragraph of retention rules is read once instead of skimmed. */
 .section__lede {
   color: var(--color-muted);
   font-size: var(--text-sm);
+  line-height: var(--lh-body);
   max-width: 62ch;
+  text-wrap: pretty;
+}
+
+/* An h1 carries its own block margin and an h2 does not, so without this the
+ * paragraph under the detections heading sat flush against it. */
+h2.section__title + .section__lede {
+  margin-block-start: var(--space-xs);
 }
 
 /* ----------------------------------------------------------- notice ------ */
@@ -187,7 +207,7 @@ h1.section__title {
   align-items: center;
   justify-content: space-between;
   gap: var(--space-sm) var(--space-md);
-  padding: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
   border: 1px solid var(--color-rule-2);
   border-inline-start: 3px solid var(--color-muted);
   border-radius: var(--radius-md);
@@ -236,7 +256,18 @@ h1.section__title {
   white-space: nowrap;
   transition:
     background-color var(--dur-micro) var(--ease-out),
-    border-color var(--dur-micro) var(--ease-out);
+    border-color var(--dur-micro) var(--ease-out),
+    color var(--dur-micro) var(--ease-out);
+}
+
+/* The plain button had no resting change at all, so half the controls on the
+ * page gave no answer to a pointer. Gated: on touch a hover would latch on the
+ * first tap and read as the wrong button. */
+@media (hover: hover) and (pointer: fine) {
+  .btn:not([disabled]):hover {
+    background: var(--color-paper-4);
+    border-color: var(--color-rule-3);
+  }
 }
 
 .btn--primary {
@@ -259,6 +290,42 @@ h1.section__title {
 .btn[disabled] {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.btn[disabled]:active {
+  transform: none;
+}
+
+/* Destructive, stated as such at the point of choice: the outline carries the
+ * warning colour in the resting state, and fills only under a pointer that has
+ * committed to it. Never a second accent colour. */
+.btn--danger {
+  background: transparent;
+  border-color: var(--color-bad);
+  color: var(--color-bad);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn--danger:hover {
+    background: var(--color-bad);
+    border-color: var(--color-bad);
+    color: var(--color-graphite);
+  }
+}
+
+/* The one filled destructive control: the confirmation inside the dialog, which
+ * is the only place an irreversible action is completed. */
+.btn--confirm {
+  background: var(--color-bad);
+  border-color: var(--color-bad);
+  color: var(--color-graphite);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .btn--confirm:hover {
+    background: var(--color-stale);
+    border-color: var(--color-stale);
+  }
 }
 
 /* In-flight: the label stays readable, the control stops accepting input. */
@@ -288,8 +355,8 @@ h1.section__title {
 
 /* The main streams are 2560×1440, which is 16:9, so the frame is reserved at
  * 16:9 and the whole frame is fitted into it: a card is not a crop of the
- * picture. Event thumbnails below keep the snapshot crop ratio instead, because
- * a small thumbnail reads better filled. */
+ * picture. Event thumbnails below are a small fixed box instead, filled, because
+ * fifty of them only stay on one grid if their box is fixed too. */
 .feed__frame {
   position: relative;
   aspect-ratio: 16 / 9;
@@ -486,6 +553,156 @@ h1.section__title {
   color: var(--color-muted);
 }
 
+/* ------------------------------------------------------------- review ----- */
+
+/* What is shown, what is ticked, and the two actions that are not the same
+ * action, stacked above the list. The count sits between them so a growing
+ * selection is visible without opening the confirmation. */
+.review {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+/* A legend is body copy, not a machine readout. At 11 px mono this was the
+ * hardest paragraph on the page to read, and it is the one that explains what
+ * the row words mean. */
+.events__rules {
+  max-width: 66ch;
+  color: var(--color-muted);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  letter-spacing: 0;
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+.events__rules strong {
+  color: var(--color-ink-2);
+  font-weight: 500;
+}
+
+/* The selection controls are boxed as one object, so no button in it can be
+ * read as the archive-wide action further down the page. Compact: the band
+ * hugs the 44 px hit floors instead of padding them out. */
+.review__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-xs) var(--space-sm);
+  padding: var(--space-2xs) var(--space-sm);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-md);
+  background: var(--color-paper-2);
+}
+
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  min-height: var(--tap-min);
+  cursor: pointer;
+}
+
+.check__label {
+  color: var(--color-ink-2);
+  font-size: var(--text-sm);
+}
+
+.check__input {
+  inline-size: 1.125rem;
+  block-size: 1.125rem;
+  margin: 0;
+  accent-color: var(--color-accent-fill);
+  cursor: pointer;
+  flex: none;
+}
+
+.check__input:disabled {
+  cursor: not-allowed;
+}
+
+.check__input:disabled + .check__label {
+  color: var(--color-faint);
+}
+
+.review__count {
+  margin-inline-start: auto;
+}
+
+/* Deleting the ticked rows is irreversible too, so it says so at the point of
+ * choice exactly as the archive-wide button does. What separates the two is the
+ * block, not the colour: this one is inside the selection band, that one is in
+ * the archive card below the list. Disabled stays neutral, because an inactive
+ * control should not read as a live threat. */
+#delete-selected:not([disabled]) {
+  border-color: var(--color-bad);
+  color: var(--color-bad);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  #delete-selected:not([disabled]):hover {
+    background: var(--color-bad);
+    border-color: var(--color-bad);
+    color: var(--color-graphite);
+  }
+}
+
+/* An outcome is a sentence about what happened, not a value in a table. */
+.review__result {
+  min-height: 1lh;
+  max-width: 66ch;
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  letter-spacing: 0;
+  line-height: var(--lh-body);
+  text-wrap: pretty;
+}
+
+.review__result[data-tone="ok"] {
+  color: var(--color-ok);
+}
+
+.review__result[data-tone="warn"] {
+  color: var(--color-stale);
+}
+
+.review__result[data-tone="bad"] {
+  color: var(--color-bad);
+}
+
+.review__result[data-tone="pending"] {
+  color: var(--color-muted);
+}
+
+/* The archive-wide action is a separate block, below the list and below the
+ * boundary it crosses: not the selection, and not the fifty rows on screen. The
+ * leading hairline of the warning colour is the whole signal — it stays a quiet
+ * card, it cannot be mistaken for the selection band, and the extra margin keeps
+ * it from reading as part of the list above it. */
+.archive {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  margin-block-start: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-rule-2);
+  border-inline-start: 2px solid var(--color-bad);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-2);
+  max-width: 78rem;
+}
+
+.archive__title {
+  color: var(--color-ink);
+  font-size: var(--text-md);
+  font-weight: 600;
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  margin-block-end: var(--space-xs);
+}
+
 .events {
   display: flex;
   flex-direction: column;
@@ -494,10 +711,16 @@ h1.section__title {
   background: var(--color-paper-2);
 }
 
+/* Three fixed columns and one flexible one: the hit floor, the picture, then
+ * whatever the row has left. minmax(0, 1fr) is what lets a long camera or zone
+ * name wrap inside the row instead of pushing fifty rows wider than the screen.
+ * The row is a fixed height because the picture is: 12 + 54 + 12. */
 .event {
-  display: flex;
+  display: grid;
+  grid-template-columns: var(--tap-min) 72px minmax(0, 1fr);
   align-items: center;
-  gap: var(--space-md);
+  column-gap: var(--space-sm);
+  row-gap: var(--space-2xs);
   padding: var(--space-sm) var(--space-md);
   min-width: 0;
 }
@@ -506,15 +729,53 @@ h1.section__title {
   border-top: 1px solid var(--color-rule);
 }
 
+/* 72 × 54: a small fixed box, always filled. At this size the snapshot's own
+ * crop ratio buys nothing that a fixed box does not, and a fixed box is what
+ * keeps fifty rows on one grid. */
 .event__shot {
-  flex: none;
   display: block;
-  inline-size: 96px;
-  aspect-ratio: var(--ratio-feed);
+  inline-size: 72px;
+  aspect-ratio: 4 / 3;
   overflow: hidden;
   border: 1px solid var(--color-rule-2);
   border-radius: var(--radius-sm);
   background: var(--color-paper-3);
+}
+
+/* The one part of the row that opens something, so it is the one part that
+ * answers a pointer. Instant, not transitioned: rows are rebuilt on every poll
+ * and this surface is scanned, not admired. */
+@media (hover: hover) and (pointer: fine) {
+  .event__shot:hover {
+    border-color: var(--color-rule-3);
+    background: var(--color-paper-4);
+  }
+}
+
+/* The tick target is the full hit floor, sitting before the picture and outside
+ * its link: selecting a row never opens the snapshot. */
+.event__pick {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  inline-size: var(--tap-min);
+  block-size: var(--tap-min);
+  cursor: pointer;
+}
+
+.event__check {
+  inline-size: 1.125rem;
+  block-size: 1.125rem;
+  margin: 0;
+  accent-color: var(--color-accent-fill);
+  cursor: pointer;
+}
+
+/* A delete in flight has already captured what it will send, so these boxes are
+ * dead: they say so rather than accepting a tick that changes nothing. */
+.event__check:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .event__img {
@@ -535,45 +796,80 @@ h1.section__title {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
-  gap: var(--space-xs);
+  gap: var(--space-2xs) var(--space-xs);
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
+/* Which camera, at full voice: the one fact every row is scanned for. */
 .event__camera {
   color: var(--color-ink);
   font-family: var(--font-readout);
   font-size: var(--text-sm);
 }
 
+/* Which part of the picture, in machine voice and one step back — a zone name
+ * is whatever the service is configured with, so it is allowed to be long and
+ * to break. */
 .event__zone {
-  color: var(--color-accent);
+  color: var(--color-muted);
   font-family: var(--font-readout);
   font-size: var(--text-xs);
   letter-spacing: 0.04em;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
-/* A fact about retention, stated on the row, and only on a row whose event
- * carries retain_indefinitely. Not a control: this page has no write path, so
- * the badge is inert by construction. */
+/* Retention, stated on the row from what this event carries. It is a fact about
+ * the snapshot, not a control: the only thing that changes it is an explicit
+ * deletion confirmed in the dialog below.
+ *
+ * Plain sentence case, no pill, no fill. Painted as a badge on all fifty rows it
+ * would claim every snapshot on the page is held for review and the accent would
+ * stop meaning anything, so the words carry it and a hairline rule separates the
+ * status from the camera and the zone. */
 .event__kept {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.0625rem var(--space-2xs);
-  border: 1px solid var(--color-accent-line);
-  border-radius: var(--radius-pill);
-  background: var(--color-accent-quiet);
-  color: var(--color-ink);
-  font-family: var(--font-readout);
+  color: var(--color-ink-2);
+  font-family: var(--font-body);
   font-size: var(--text-xs);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
-/* The same words in the section lede stay body text on purpose. Painted as a
- * badge there they claimed every snapshot on the page is retained, which is a
- * per-event flag this page cannot assume; as text they read as the label, and
- * the sentence after it says what the flag means. */
+/* The 60 s dwell, shown only on a row that entered the secondary zone. It says
+ * how long someone was in view and nothing about why, so it sits one step below
+ * the retention fact rather than competing with it. */
+.event__flag {
+  color: var(--color-muted);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+/* The separator is an empty pseudo-element, so it draws a rule without putting
+ * a character in the accessibility tree. */
+.event__kept::before,
+.event__flag::before {
+  content: "";
+  display: inline-block;
+  inline-size: 1px;
+  block-size: 0.7em;
+  margin-inline-end: var(--space-xs);
+  translate: 0 0.1em;
+  background: var(--color-rule-3);
+}
+
+/* The time is the other fact every row is scanned for, so it is set at meta
+ * size in the same voice as the camera name. */
+.event__time {
+  color: var(--color-ink-2);
+  font-size: var(--text-sm);
+  letter-spacing: 0;
+}
+
+/* The same vocabulary stays body text in the rules paragraph above the list.
+ * Painted as badges there it would claim every snapshot on the page is retained,
+ * which is a per-event flag this page reads from the event; as text it reads as
+ * the legend, and the sentence after each word says what the flag means. */
 
 .events__empty {
   padding: var(--space-lg) var(--space-md);
@@ -584,13 +880,74 @@ h1.section__title {
   max-width: 60ch;
 }
 
+/* ---------------------------------------------------------- dialog ------- */
+
+/* Native <dialog>, modal, no component and no motion of its own: the browser
+ * draws the surface, the focus trap and the backdrop behaviour. Only the two
+ * deliberate colours are set here. */
+.confirm {
+  inline-size: min(30rem, calc(100vw - 2rem));
+  /* The scope sentence is long and a landscape phone is short: the dialog never
+   * grows past the viewport and scrolls inside itself rather than being cut off
+   * with its own confirm button below the fold. */
+  max-block-size: calc(100dvh - 2rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-md);
+  border: 1px solid var(--color-rule-2);
+  border-radius: var(--radius-lg);
+  background: var(--color-paper-2);
+  color: var(--color-ink-2);
+}
+
+.confirm::backdrop {
+  background: oklch(10% 0.008 256 / 0.72);
+}
+
+.confirm__title {
+  font-size: var(--text-md);
+  margin-block-end: var(--space-sm);
+}
+
+.confirm__scope {
+  color: var(--color-ink);
+  font-size: var(--text-sm);
+  max-width: 56ch;
+  text-wrap: pretty;
+}
+
+.confirm__note {
+  margin-block-start: var(--space-xs);
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  max-width: 56ch;
+  text-wrap: pretty;
+}
+
+.confirm__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-xs) var(--space-sm);
+  margin-block-start: var(--space-md);
+}
+
+/* Cancel is the way out and is where this dialog opens, so it reads as the
+ * default: a raised control with a crisp boundary, beside the one filled
+ * destructive button. It stays first in the DOM, so tabbing, reading and the
+ * visual order agree — an irreversible action is never the first control under
+ * a thumb that only needs to back out. */
+#delete-cancel {
+  border-color: var(--color-rule-3);
+}
+
 /* ------------------------------------------------------------ footer ----- */
 
 .foot {
   border-top: 1px solid var(--color-rule);
-  padding: var(--space-lg) clamp(1rem, 4vw, 2.5rem);
+  padding: var(--space-md) clamp(1rem, 4vw, 2.5rem);
   padding-inline: max(clamp(1rem, 4vw, 2.5rem), env(safe-area-inset-left));
-  padding-bottom: max(var(--space-lg), env(safe-area-inset-bottom));
+  padding-bottom: max(var(--space-md), env(safe-area-inset-bottom));
 }
 
 .foot__line {
@@ -648,8 +1005,26 @@ h1.section__title {
     gap: var(--space-xs);
   }
 
-  .event__shot {
-    inline-size: 72px;
+  /* At 320 the row keeps all three columns and only gives the picture its
+   * smaller box — 44 + 8 + 60 + 8 — so the metadata keeps a column of its own
+   * to wrap in instead of the row being pushed wider than the screen. */
+  .event {
+    grid-template-columns: var(--tap-min) 60px minmax(0, 1fr);
+    column-gap: var(--space-xs);
+  }
+
+  .review__count {
+    margin-inline-start: 0;
+  }
+
+  /* Narrow enough that the dialog's two actions wrap: each takes a full row, in
+   * the order they are read, so neither can be mistaken for the other. */
+  .confirm__actions {
+    justify-content: flex-start;
+  }
+
+  .confirm__actions > .btn {
+    flex: 1 1 8rem;
   }
 }
 

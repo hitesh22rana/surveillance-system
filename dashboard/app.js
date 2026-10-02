@@ -1,4 +1,4 @@
-/* Surveillance Console — read-only view of four cameras.
+/* Surveillance Console — live view of four cameras, with manual snapshot review.
  *
  * Rules this file follows on purpose:
  *   - Every value shown is read from the camera service or counted from what it
@@ -17,9 +17,16 @@
  *   - All text goes in through textContent. No innerHTML, no insertAdjacentHTML,
  *     no document.write.
  *   - Snapshot paths are only ever built from ids that match the camera
- *     service's own tracker id shape, which is also what nginx accepts.
+ *     service's own tracker id shape, which is also what nginx accepts and what
+ *     the delete request is re-checked against before it is sent.
  *   - Timers never overlap: one loop for stats and events, both stopped while
- *     the tab is hidden.
+ *     the tab is hidden. The archive is re-read only on its latest page, so a
+ *     page the operator is reading through history stays where they put it.
+ *   - Deleting a snapshot is the one write this page can make, and it takes an
+ *     explicit confirmation: two fixed endpoints, one POST, no retry, a finite
+ *     timeout, and a captured id list so nothing that happens while the
+ *     confirmation is open can widen what is deleted. The result claims the list
+ *     was refreshed only once a fresh read of it has actually landed.
  */
 (() => {
   "use strict";
@@ -33,9 +40,49 @@
     camera_4: "camera_4_area",
   });
 
+  /* The secondary zone, 60 seconds of tracked presence in the same area. A row
+   * qualifies for review by entering it, and its internal name is never shown:
+   * the row reads "Loitering ≥60 s", which says how long someone was tracked
+   * there and nothing about why. That 60 s is the camera service's own count of
+   * frames it tracked inside the zone, not a stopwatch run here. */
+  const LOITERING_ZONE = Object.freeze({
+    camera_1: "camera_1_loitering",
+    camera_2: "camera_2_loitering",
+    camera_3: "camera_3_loitering",
+    camera_4: "camera_4_loitering",
+  });
+
+  const LOITERING_LABEL = "Loitering ≥60 s";
+
+  /* The only two paths this page may write to, both served by the retention
+   * worker, both fixed: no template, no query string, no second shape. */
+  const SUMMARY_PATH = "/api/snapshots/summary";
+  const DELETE_PATH = "/api/snapshots/delete";
+
+  /* The one read this page forwards a query string to. The worker owns both
+   * parameters and answers a fixed page of 25 rows plus the total and the page
+   * count, so this page never asks for a size and never slices one for itself. */
+  const EVENTS_PATH = "/api/snapshots/events";
+
   const POLL_MS = 5000; // status + events
-  const TIMEOUT_MS = 4000; // per request, below the proxy's own timeout
+  const TIMEOUT_MS = 4000; // per live request, below the proxy's own timeout
   const STATS_STALE_MS = 20000; // an older stats sample is not current state
+
+  /* Counting a real total means walking the archive, so both archive reads — the
+   * count behind the archive-wide delete and the page walk behind the pager —
+   * are given the same 60 s the proxy gives them rather than the 4 s a live read
+   * gets. A walk that outlives its window is reported, never read as an empty
+   * archive. */
+  const ARCHIVE_READ_MS = 60000;
+
+  /* The delete is the one request allowed a long answer: the proxy gives it the
+   * same 60 s and this page gives up at that same finite moment. There is no
+   * retry — a delete that may already have happened is never sent twice. */
+  const DELETE_TIMEOUT_MS = 60000;
+
+  /* The worker's own ceiling on one id list, so the page stops at it rather than
+   * sending a body it already knows will be refused. */
+  const MAX_SELECTIONS = 1000;
 
   /* A 25 fps stream delivers a frame every ~40 ms and timeupdate fires several
    * times a second while it plays, so four seconds with neither is a stalled
@@ -45,7 +92,6 @@
   const RECONNECT_MS = 5000;
   const MAX_ATTEMPTS = 3;
 
-  const EVENT_LIMIT = 50; // rows shown per camera
   // "<frame_time>-<rand_id>": timestamp with optional decimal, hyphen, 6 chars.
   const EVENT_ID = /^[0-9]+(?:\.[0-9]+)?-[a-z0-9]{6}$/;
 
@@ -60,8 +106,24 @@
     retryLabel: $("retry-label"),
     filters: $("filters"),
     tally: $("events-tally"),
+    selectShown: $("select-shown"),
+    clearSelection: $("clear-selection"),
+    selectionCount: $("selection-count"),
+    deleteSelected: $("delete-selected"),
+    deleteAll: $("delete-all"),
+    deleteResult: $("delete-result"),
+    dialog: $("delete-dialog"),
+    confirmTitle: $("delete-dialog-title"),
+    confirmScope: $("delete-dialog-scope"),
+    confirmCancel: $("delete-cancel"),
+    confirmButton: $("delete-confirm"),
+    confirmLabel: $("delete-confirm-label"),
     events: $("events"),
     eventsEmpty: $("events-empty"),
+    pagePrev: $("page-prev"),
+    pageNext: $("page-next"),
+    pageSelect: $("page-select"),
+    pageLatest: $("page-latest"),
     statLive: $("stat-live"),
     statDetectRate: $("stat-detect-rate"),
     statInference: $("stat-inference"),
@@ -71,14 +133,22 @@
 
   const state = {
     filter: "all",
+    page: 1,
+    pages: 1,
+    pageSize: 1,
+    total: 0,
+    generation: 0, // one counter for every archive read, so a slow one cannot
+    // answer a page the operator has already moved on from
     sample: null, // newest usable stats entry, or null
     statsRead: false,
     statsStale: false,
     statsAge: null, // seconds since service.last_updated, when known
+    rows: [], // the rows of the page on screen, newest first, and nothing else
     eventsRead: false,
+    eventsLoading: false,
     statsError: null,
     eventsError: null,
-    lastEvents: null, // { rows } for all four cameras; selection is a render filter
+    deleting: false, // a confirmed delete is in flight; no second one can start
   };
 
   const cards = new Map();
@@ -123,16 +193,54 @@
     return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
   };
 
+  /* Archive rows are read days apart, so they carry the date as well as the
+   * clock: native Intl, in this browser's own locale and time zone, and no
+   * formatting library. The live stamps above stay on the clock alone, because a
+   * picture is never as old as a page. */
+  const archiveStamp = (() => {
+    try {
+      const format = new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "medium",
+      });
+      return (ms) => format.format(new Date(ms));
+    } catch (err) {
+      return (ms) => new Date(ms).toLocaleString();
+    }
+  })();
+
   const plural = (n, word) => n + " " + word + (n === 1 ? "" : "s");
+
+  // Frigate reports retain_indefinitely as a JSON boolean. The numeric 1 is
+  // accepted for the same reason detection_enabled is; a string is never a yes.
+  const isKept = (event) => event.retain_indefinitely === true || event.retain_indefinitely === 1;
+
+  const inLoiterZone = (event) => {
+    const zone = LOITERING_ZONE[event.camera];
+    return zone !== undefined && Array.isArray(event.zones) && event.zones.includes(zone);
+  };
+
+  /* Retention, stated from what this event carries and never assumed. An
+   * ordinary row expires after the six hours the camera service keeps it; a row
+   * held by the secondary zone is held for review; a row held without that zone
+   * is from the older archive, before the 60 s zone existed. */
+  function retentionText(event) {
+    if (!isKept(event)) return "6-hour retention";
+    return inLoiterZone(event) ? "Kept for review" : "Previously kept";
+  }
+
+  /* A count the service reported, accepted only when it is already a whole
+   * number of the right size. A decimal, a negative, a string or a missing
+   * count is a reply this page does not understand, not a count of zero. */
+  const wholeCount = (value) =>
+    typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
 
   // "camera_2" -> "Camera 2". Internal names never reach the page.
   const cameraLabel = (camera) => "Camera " + String(camera).slice(-1);
 
-  const cameraSet = (cameras) => new Set(cameras);
-
-  async function fetchJSON(url) {
+  async function fetchJSON(url, timeoutMs = TIMEOUT_MS) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, {
         cache: "no-store",
@@ -320,8 +428,9 @@
      * placeholder rather than hidden, so the default threshold finds no
      * intersection, tears the connection down before a single frame arrives, and
      * the card would read "starting" for ever. Page visibility is still honoured
-     * here: the visibilitychange handler below unmounts and rebuilds every
-     * player when the tab comes back. */
+     * one level up: the visibilitychange handler stops the read loop while the
+     * tab is hidden and starts it again on the way back, leaving a player that
+     * survived the background running instead of rebuilding it. */
     player.visibilityThreshold = 0;
     if (!player.video) player.oninit();
     const video = player.video;
@@ -576,45 +685,103 @@
 
   /* -------------------------------------------------------------- events -- */
 
-  const selectedCameras = () =>
-    state.filter === "all" ? CAMERAS.slice() : [state.filter];
-
-  /* A row must be a person, must carry a snapshot, must come from a selected
-   * camera, and must have entered that camera's required zone. wantedCameras is
-   * a Set of camera names, never a Set of zone names. */
-  function zoneEvent(event, wantedCameras) {
-    if (!isObject(event)) return false;
-    if (event.label !== "person") return false;
-    if (event.has_snapshot !== true) return false;
-    if (typeof event.id !== "string" || !EVENT_ID.test(event.id)) return false;
-    if (typeof event.camera !== "string") return false;
-    if (!wantedCameras.has(event.camera)) return false;
-    if (!Array.isArray(event.zones)) return false;
-    return event.zones.includes(REQUIRED_ZONE[event.camera]);
+  /* The archive is the worker's own set — a saved person snapshot on a
+   * configured camera, which is exactly the set the archive-wide delete counts
+   * and reaches — so it is listed as it answers and never re-filtered here.
+   * A second filter in this file could only hide rows the total still counts,
+   * which is how a page ends up claiming a range it is not showing. The one
+   * guard kept is the id: it is the only field that becomes a delete body. */
+  function listedEvent(event) {
+    return isObject(event) && typeof event.id === "string" && EVENT_ID.test(event.id);
   }
 
   const zoneLabel = (event) => {
     const list = Array.isArray(event.zones) ? event.zones : [];
-    const named = list.filter((zone) => zone !== REQUIRED_ZONE[event.camera]);
+    // Both known zones are stripped: the area is stated in words and the tracked
+    // presence is stated in words, so no configured zone name reaches the page.
+    const named = list.filter(
+      (zone) => zone !== REQUIRED_ZONE[event.camera] && zone !== LOITERING_ZONE[event.camera]
+    );
     if (named.length > 0) return named.join(" + ");
     return "Monitored area";
   };
 
-  // Selection is applied here, at render time, so changing the filter never
-  // shows rows that belong to a camera that is not selected — including while a
-  // read is still in flight.
-  function visibleRows() {
-    const data = state.lastEvents;
-    const rows = data && Array.isArray(data.rows) ? data.rows : [];
-    return selectedCameras()
-      .reduce((acc, camera) => acc.concat(rows.filter((row) => row.camera === camera)), [])
-      .sort((a, b) => (b.start_time || 0) - (a.start_time || 0))
-      .slice(0, EVENT_LIMIT);
-  }
+  /* The rows of the page on screen. Filtering is the worker's, paging is this
+   * page's, and a selection outlives both: the Set below is never pruned
+   * against a single page, because a page says nothing about any other one. */
+  const visibleRows = () => state.rows;
 
   let renderedSignature = null;
+  let renderedOptions = 0;
+
+  // Rows are rebuilt from the template, and a row's checkbox is remembered by
+  // node rather than by a data attribute, so a tracker id is never written into
+  // markup that another script on this page could read.
+  const checkIds = new WeakMap();
 
   function renderEvents() {
+    renderEventList();
+    renderPager();
+    renderSelection();
+  }
+
+  function tallyText() {
+    if (!state.eventsRead) {
+      if (state.eventsError !== null) {
+        return "Saved detections unavailable: " + state.eventsError.message;
+      }
+      return state.eventsLoading ? "Reading saved detections…" : "Waiting for detection data.";
+    }
+    const scope = state.filter === "all" ? "all cameras" : cameraLabel(state.filter);
+    if (state.total === 0) return "No saved detections · " + scope;
+    // The worker clamps a page past the end, so this is a shape this page does not
+    // expect rather than a state it expects: it is said plainly, never as a range.
+    if (state.rows.length === 0) {
+      return "No detections on this page · page " + state.page + " of " + state.pages + " · " + scope;
+    }
+    const from = (state.page - 1) * state.pageSize + 1;
+    return (
+      "Showing " +
+      from +
+      "–" +
+      (from + state.rows.length - 1) +
+      " of " +
+      state.total +
+      " · page " +
+      state.page +
+      " of " +
+      state.pages +
+      " · " +
+      scope
+    );
+  }
+
+  /* Native controls only, and every one of them disabled whenever a read is in
+   * flight or a delete is: a page control that answered while the list behind it
+   * was still loading would be describing a page nobody can see. */
+  function renderPager() {
+    const busy = state.eventsLoading || state.deleting;
+    const pages = state.pages;
+
+    if (renderedOptions !== pages) {
+      while (el.pageSelect.firstChild) el.pageSelect.removeChild(el.pageSelect.firstChild);
+      for (let page = 1; page <= pages; page += 1) {
+        const option = document.createElement("option");
+        option.value = String(page);
+        option.textContent = String(page);
+        el.pageSelect.appendChild(option);
+      }
+      renderedOptions = pages;
+    }
+    el.pageSelect.value = String(state.page);
+
+    el.pageSelect.disabled = busy || pages <= 1;
+    el.pagePrev.disabled = busy || state.page <= 1;
+    el.pageNext.disabled = busy || state.page >= pages;
+    el.pageLatest.disabled = busy || state.page === 1;
+  }
+
+  function renderEventList() {
     const rows = visibleRows();
 
     if (!state.eventsRead) {
@@ -622,19 +789,27 @@
       setShown(el.eventsEmpty, false);
       while (el.events.firstChild) el.events.removeChild(el.events.firstChild);
       renderedSignature = null;
-      el.tally.textContent =
-        state.eventsError === null
-          ? "Waiting for detection data."
-          : "Recent detections unavailable: " + state.eventsError.message;
+      el.tally.textContent = tallyText();
       return;
     }
 
-    const scope = state.filter === "all" ? "all cameras" : cameraLabel(state.filter);
-    el.tally.textContent = plural(rows.length, "detection") + " · " + scope;
+    el.tally.textContent = tallyText();
 
-    // Rebuild only when the row set actually changes, so a focused row is not
-    // destroyed by an unrelated poll.
-    const signature = state.filter + "#" + rows.map((row) => row.id + ":" + (row.retain_indefinitely === true || row.retain_indefinitely === 1 ? "1" : "0")).join("|");
+    // Rebuild only when a row's content actually changes, so a focused checkbox
+    // is not destroyed by an unrelated poll. The signature carries the page it
+    // was built for and the two facts that are printed on the row, so a change of
+    // page, a change of retention or a change of zone is always a real change.
+    const signature =
+      state.filter +
+      "#" +
+      state.page +
+      "#" +
+      rows
+        .map(
+          (row) =>
+            row.id + ":" + (isKept(row) ? "1" : "0") + (inLoiterZone(row) ? "L" : "-")
+        )
+        .join("|");
     if (signature === renderedSignature) {
       setShown(el.events, rows.length !== 0);
       setShown(el.eventsEmpty, rows.length === 0);
@@ -647,10 +822,19 @@
     for (const event of rows) {
       const node = el.eventTemplate.content.firstElementChild.cloneNode(true);
       const label = cameraLabel(event.camera);
-      const at = clockTime(
-        numberOrNull(event.start_time) !== null ? event.start_time * 1000 : Date.now()
-      );
+      const start = numberOrNull(event.start_time);
+      // An event with no usable start_time says so rather than borrowing the
+      // browser's own clock, which would date a snapshot to whenever it was read.
+      const at = start === null ? "time not reported" : archiveStamp(start * 1000);
       const href = "/api/events/" + event.id + "/snapshot.jpg";
+
+      const check = node.querySelector(".event__check");
+      checkIds.set(check, event.id);
+      check.checked = selection.has(event.id);
+      // Named for this row and no other, so a tick is never an unnamed box in a
+      // list. The label sits apart from the snapshot link, so ticking a row
+      // neither opens the picture nor turns a page.
+      check.setAttribute("aria-label", "Select snapshot from " + label + " at " + at);
 
       const link = node.querySelector(".event__shot");
       const img = node.querySelector(".event__img");
@@ -663,12 +847,12 @@
       node.querySelector(".event__zone").textContent = zoneLabel(event);
       node.querySelector(".event__time").textContent = at;
 
-      // Frigate is holding this snapshot indefinitely. It is stated, not
-      // changed: there is no keep, release or delete path on this page.
-      const kept = event.retain_indefinitely === true || event.retain_indefinitely === 1;
-      const badge = node.querySelector(".event__kept");
-      setShown(badge, kept);
-      if (kept) badge.textContent = "Kept for review";
+      // Two facts, each from the event: whether the 60 s zone is among its zones,
+      // and whether it is being held. Neither is a judgement about a person.
+      const flag = node.querySelector(".event__flag");
+      setShown(flag, inLoiterZone(event));
+      if (inLoiterZone(event)) flag.textContent = LOITERING_LABEL;
+      node.querySelector(".event__kept").textContent = retentionText(event);
 
       el.events.appendChild(node);
     }
@@ -676,6 +860,527 @@
     const empty = rows.length === 0;
     setShown(el.eventsEmpty, empty);
     setShown(el.events, !empty);
+    el.eventsEmpty.textContent =
+      state.total === 0
+        ? state.filter === "all"
+          ? "No saved detections yet"
+          : "No saved detections for " + cameraLabel(state.filter)
+        : "No detections on this page";
+  }
+
+  /* -------------------------------------------------------------- review -- */
+
+  /* Tracker ids the operator has ticked, and nothing else. The Set outlives
+   * pages, filters, polls and row rebuilds, so a tick is never lost because
+   * something else was read; it is dropped only by a delete that accounted for
+   * it, or by the operator clearing the selection. */
+  const selection = new Set();
+
+  /* What is known about each selected id, kept for the selected rows only, at
+   * the moment they were ticked. A page read cannot be asked what is on the
+   * other pages, so this is where an off-page selection's own facts come from:
+   * the confirmation counts what it can really count, and the archive-wide
+   * cutoff is applied to a start time that was read, never invented. */
+  const selectedMeta = new Map();
+
+  /* Only ids of the service's own shape are kept, and only ids of that shape are
+   * ever sent: this Set is the one thing on the page that becomes a body. */
+  const nativeIds = () => Array.from(selection).filter((id) => EVENT_ID.test(id));
+
+  // Returns false at the worker's own ceiling rather than sending a body it has
+  // already been told it will refuse.
+  function selectRow(row) {
+    if (selection.has(row.id)) return true;
+    if (selection.size >= MAX_SELECTIONS) return false;
+    selection.add(row.id);
+    selectedMeta.set(row.id, {
+      camera: row.camera,
+      start: numberOrNull(row.start_time),
+      kept: isKept(row),
+    });
+    return true;
+  }
+
+  function deselectRow(id) {
+    selection.delete(id);
+    selectedMeta.delete(id);
+  }
+
+  function overLimit() {
+    return selection.size > MAX_SELECTIONS;
+  }
+
+  /* Checkbox state is written onto the rows already on screen, so select-all and
+   * clear never rebuild the list and never take the focus off a row. */
+  function syncChecks() {
+    const busy = state.deleting;
+    for (const box of el.events.querySelectorAll(".event__check")) {
+      const id = checkIds.get(box);
+      box.checked = id !== undefined && selection.has(id);
+      // While a delete is in flight the whole bar is dead, and so is every row
+      // box with it: the body was captured when the dialog opened, so a tick now
+      // would change nothing about what is deleted and would read as if it had.
+      box.disabled = busy;
+    }
+  }
+
+  function renderSelection() {
+    syncChecks();
+
+    const rows = visibleRows();
+    const shown = rows.reduce((total, row) => total + (selection.has(row.id) ? 1 : 0), 0);
+    const total = selection.size;
+    const busy = state.deleting;
+
+    el.selectShown.disabled = busy || !state.eventsRead || rows.length === 0;
+    el.selectShown.checked = rows.length > 0 && shown === rows.length;
+    // Mixed is its own state: some shown rows are ticked, and the box says so.
+    el.selectShown.indeterminate = shown > 0 && shown < rows.length;
+
+    // "Shown" is this page and only this page, and it is said next to the total
+    // so a selection carried across pages is never read as a selection on screen.
+    el.selectionCount.textContent =
+      total === 0
+        ? "0 selected"
+        : plural(total, "snapshot") +
+            " selected · " +
+            shown +
+            " of " +
+            rows.length +
+            " shown" +
+            (overLimit() ? " · over the " + MAX_SELECTIONS + " per-delete limit" : "");
+
+    // Nothing to delete and no delete in flight: both controls say so by being
+    // disabled rather than by answering with an empty request.
+    el.clearSelection.disabled = busy || total === 0;
+    el.deleteSelected.disabled = busy || total === 0;
+    el.deleteAll.disabled = busy;
+  }
+
+  /* ------------------------------------------------------- confirmation -- */
+
+  /* What the confirmation will send, captured when it opens. A poll, a filter
+   * change, a new detection or another tick while the dialog is open cannot
+   * change it: the body is built from this object and from nothing read after the
+   * moment it was captured. */
+  let intent = null;
+
+  /* Only the two bodies in the contract can leave this page: a list of native
+   * tracker ids, or the archive-wide cutoff the summary handed back. Anything
+   * else is refused here, before a request exists. */
+  function sendableBody(body) {
+    if (!isObject(body)) return null;
+    if (Array.isArray(body.ids)) {
+      const ids = body.ids;
+      if (ids.length === 0) return null;
+      if (!ids.every((id) => typeof id === "string" && EVENT_ID.test(id))) return null;
+      return { ids: ids.slice() };
+    }
+    const before = numberOrNull(body.before);
+    if (body.all === true && before !== null && before > 0) return { all: true, before: before };
+    return null;
+  }
+
+  function openConfirm(next) {
+    // A second confirmation is never stacked on an open one, and a confirmation
+    // with nothing valid to send is never opened at all.
+    if (el.dialog.open) return false;
+    const body = sendableBody(next.body);
+    if (!body) return false;
+
+    intent = { body: body, count: next.count };
+    el.confirmTitle.textContent = next.title;
+    el.confirmScope.textContent = next.scope;
+    el.confirmLabel.textContent = next.label;
+    // An archive that is already empty leaves nothing to confirm.
+    el.confirmButton.disabled = next.count === 0;
+    el.confirmButton.dataset.busy = "false";
+    // Always armed on open: a dialog left over from a delete that has finished
+    // must not arrive with its way out still switched off.
+    el.confirmCancel.disabled = false;
+    el.dialog.showModal();
+    // Cancel is the default focus. An irreversible action never opens with the
+    // destructive button already under the operator's thumb.
+    el.confirmCancel.focus();
+    return true;
+  }
+
+  /* The kept count is counted from what was read for each selected id when it was
+   * ticked, so a selection carried across pages is counted as honestly as one
+   * sitting on the page in front of the operator. An id this page has no record
+   * of is left out of that count rather than guessed at. */
+  function selectedScope(ids) {
+    const kept = ids.reduce((total, id) => {
+      const meta = selectedMeta.get(id);
+      return total + (meta && meta.kept ? 1 : 0);
+    }, 0);
+    return (
+      plural(ids.length, "selected snapshot") +
+      " will be deleted" +
+      (kept > 0 ? ", including " + kept + " kept for review" : "") +
+      ", and nothing else. Detections that arrive while this is open are not affected."
+    );
+  }
+
+  function archiveScope(summary) {
+    if (summary.count === 0) {
+      return "There are no saved snapshots to delete, so there is nothing to confirm.";
+    }
+    return (
+      "All " +
+      plural(summary.count, "saved snapshot") +
+      " on all four cameras will be deleted, including every one held for review, " +
+      "on every page of the archive and not only the pages shown above."
+    );
+  }
+
+  /* ------------------------------------------------------------- deletes -- */
+
+  /* One POST, once. No retry and no automatic second attempt, ever: a delete that
+   * may already have happened must not be sent twice. Origin is added by the
+   * browser on a POST and cannot be written from here, which is the point of
+   * letting the worker check it. */
+  async function postDelete(body) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), DELETE_TIMEOUT_MS);
+    try {
+      const res = await fetch(DELETE_PATH, {
+        method: "POST",
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Surveillance-Action": "delete",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  function describeDeleteError(err) {
+    if (err && err.name === "AbortError") {
+      return "no answer within " + Math.round(DELETE_TIMEOUT_MS / 1000) + " s";
+    }
+    if (err && err.name === "TypeError") return "no response from the snapshot service";
+    if (err && err.message) return err.message;
+    return "the request failed";
+  }
+
+  /* The reply is the only account of what happened, and it is taken at face value
+   * or not at all. Every count must be a whole number that cannot be negative and
+   * every entry of failed must be an id this page could itself have sent: a
+   * missing field, a decimal, a negative, a float or an id of the wrong shape
+   * makes the whole reply invalid, and an invalid reply is never repaired into a
+   * number of zero. Guessing here would turn an answer this page does not
+   * understand into a claim about what was deleted. */
+  function deleteReply(payload) {
+    if (!isObject(payload)) return null;
+    const deleted = wholeCount(payload.deleted);
+    const missing = wholeCount(payload.missing);
+    const active = wholeCount(payload.active);
+    if (deleted === null || missing === null || active === null) return null;
+    if (!Array.isArray(payload.failed)) return null;
+    // All of them, not the subset that happens to look familiar: one id this page
+    // never sent means the reply is not the reply it claims to be.
+    if (!payload.failed.every((id) => typeof id === "string" && EVENT_ID.test(id))) return null;
+    return { deleted: deleted, missing: missing, active: active, failed: payload.failed.slice() };
+  }
+
+  function showOutcome(tone, text) {
+    el.deleteResult.dataset.tone = tone;
+    el.deleteResult.textContent = text;
+  }
+
+  /* A reply that came back settles the selection, and it settles it differently
+   * for the two deletes. A selected delete is exactly the ids it was given: what
+   * it accounted for leaves the selection and what it named as failed stays
+   * selected, so a snapshot that survived is still on screen and still a
+   * deliberate act. An archive-wide delete was never a selection at all, so
+   * everything behind the captured cutoff leaves the selection whatever the
+   * outcome: what failed is still saved, and leaving it ticked would imply a
+   * second delete had been asked for. */
+  function settleSelection(body, shape) {
+    const chosen = Array.isArray(body.ids) ? new Set(body.ids) : null;
+
+    if (chosen !== null) {
+      const failed = new Set(shape.failed);
+      for (const id of Array.from(selection)) {
+        // Deleted and already-gone both leave the selection; a named failure stays
+        // ticked, so a snapshot that survived is still a deliberate act.
+        if (chosen.has(id) && !failed.has(id)) deselectRow(id);
+      }
+      return;
+    }
+
+    // Archive-wide: only a row behind the captured cutoff was in scope, so a
+    // newer selection is left exactly as it was, and a selected row whose start
+    // time was never read is left ticked rather than guessed out of scope.
+    for (const id of Array.from(selection)) {
+      const meta = selectedMeta.get(id);
+      if (meta && meta.start !== null && meta.start < body.before) deselectRow(id);
+    }
+  }
+
+  /* The clause about the list is written last, once the re-read behind it has
+   * settled: a result never claims a refresh that did not happen, and a failed
+   * read says so rather than reading as a refreshed list. */
+  function refreshClause(refreshed) {
+    return refreshed.ok
+      ? " The list below has been refreshed."
+      : " The list below could not be refreshed (" +
+          refreshed.error +
+          "), so it may be out of date.";
+  }
+
+  function showDeleteResult(body, shape, refreshed) {
+    settleSelection(body, shape);
+
+    const archive = !Array.isArray(body.ids);
+    const parts = [];
+    if (shape.deleted > 0) parts.push(plural(shape.deleted, "snapshot") + " deleted");
+    if (shape.missing > 0) {
+      parts.push(shape.missing + (shape.missing === 1 ? " was" : " were") + " already gone");
+    }
+    if (shape.failed.length > 0) {
+      parts.push(
+        plural(shape.failed.length, "snapshot") +
+          " could not be deleted; still saved and " +
+          (archive ? "not selected" : "still selected")
+      );
+    }
+    if (parts.length === 0) parts.push("Nothing was deleted");
+    // A detection that is still running keeps writing snapshots, so an emptied
+    // archive is not the end of it and is not left to be assumed.
+    if (shape.active > 0) {
+      parts.push(
+        plural(shape.active, "active detection") +
+          (shape.active === 1 ? " is" : " are") +
+          " still running and can save new snapshots"
+      );
+    }
+    showOutcome(
+      // A list that could not be re-read is not a clean result either, whatever
+      // the delete itself reported.
+      shape.failed.length > 0 || !refreshed.ok ? "warn" : "ok",
+      parts.join(". ") + "." + refreshClause(refreshed)
+    );
+    // The selection settled just above, so the count and every row box are
+    // re-stated from it rather than waiting for the next poll.
+    renderSelection();
+  }
+
+  function showDeleteFailure(message, refreshed) {
+    // No usable reply, so nothing is assumed in either direction: the selection
+    // is untouched, no id is marked deleted, and nothing is sent again.
+    showOutcome(
+      "bad",
+      "The delete did not finish (" +
+        message +
+        "). Some snapshots may already have been deleted. Nothing was sent again and " +
+        "nothing is marked deleted here." +
+        refreshClause(refreshed)
+    );
+  }
+
+  async function runDelete() {
+    const pending = intent;
+    if (!pending || state.deleting) return;
+
+    state.deleting = true;
+    // Disabled before the request leaves, so a second click cannot start a second
+    // delete while the first is still running.
+    el.confirmButton.disabled = true;
+    el.confirmButton.dataset.busy = "true";
+    // The request is already out, so there is nothing left to cancel. Cancel goes
+    // dead with the button and the dialog refuses Escape, or the delete would
+    // keep running behind a closed dialog with nothing on screen saying so.
+    el.confirmCancel.disabled = true;
+    el.confirmLabel.textContent = "Deleting…";
+    showOutcome("pending", "Deleting…");
+    renderSelection();
+
+    let reply = null;
+    let failure = null;
+    try {
+      reply = await postDelete(pending.body);
+    } catch (err) {
+      failure = describeDeleteError(err);
+    }
+
+    const shape = reply === null ? null : deleteReply(reply);
+    intent = null;
+    el.dialog.close();
+
+    // The list is re-read rather than patched: only the service knows what is
+    // left, and new snapshots may have been written on the way. This is a read,
+    // so it can fail without anything having been sent a second time — the POST
+    // above is the only one, whether or not this one answers.
+    const refreshed = await readEvents();
+
+    /* Every control stays dead until the re-read has landed and the result is on
+     * screen. Releasing the bar any earlier would put a live Delete button next to
+     * a delete whose outcome is still unknown, which is the one state in which a
+     * second click would start a second POST. */
+    state.deleting = false;
+    el.confirmCancel.disabled = false;
+    render();
+
+    if (failure !== null) showDeleteFailure(failure, refreshed);
+    else if (shape === null) {
+      showDeleteFailure("the reply was not a valid delete result", refreshed);
+    } else showDeleteResult(pending.body, shape, refreshed);
+
+    schedulePoll(POLL_MS);
+  }
+
+  /* The archive count and the cutoff that scopes it, read fresh every time the
+   * archive-wide confirmation is opened. This is a read: a count of zero deletes
+   * nothing and simply leaves the confirm button disabled. */
+  function usableSummary(payload) {
+    if (!isObject(payload)) return null;
+    const count = payload.count;
+    const before = numberOrNull(payload.before);
+    if (typeof count !== "number" || !Number.isFinite(count) || count < 0) return null;
+    if (before === null || before <= 0) return null;
+    return { count: Math.floor(count), before: before };
+  }
+
+  async function readSummary() {
+    try {
+      return { summary: usableSummary(await fetchJSON(SUMMARY_PATH, ARCHIVE_READ_MS)) };
+    } catch (err) {
+      return { error: describe(err) };
+    }
+  }
+
+  async function confirmArchiveDelete() {
+    if (state.deleting) return;
+    // Held while the count is read, so a second click cannot open a second
+    // confirmation, and handed back whether or not one opens.
+    el.deleteAll.disabled = true;
+    const read = await readSummary();
+    el.deleteAll.disabled = state.deleting;
+
+    if (!read.summary) {
+      showOutcome(
+        "bad",
+        "The saved snapshot count could not be read (" +
+          (read.error || "unexpected response shape") +
+          "), so no confirmation was opened and nothing was sent. Nothing is deleted until a " +
+          "count is in front of you."
+      );
+      render();
+      return;
+    }
+
+    const summary = read.summary;
+    openConfirm({
+      title: "Delete every saved snapshot?",
+      scope: archiveScope(summary),
+      label: summary.count === 0 ? "Delete saved snapshots" : "Delete all " + summary.count,
+      count: summary.count,
+      body: { all: true, before: summary.before },
+    });
+    render();
+  }
+
+  /* ------------------------------------------------------------- actions -- */
+
+  function onSelectShown() {
+    if (state.deleting) return;
+    // This page and only this page, which is exactly what is on screen. Never the
+    // whole archive, and never a page the operator is not looking at.
+    const wanted = el.selectShown.checked;
+    let refused = false;
+    for (const row of visibleRows()) {
+      if (wanted) {
+        if (!selectRow(row)) refused = true;
+      } else {
+        deselectRow(row.id);
+      }
+    }
+    renderSelection();
+    if (refused) showLimit();
+  }
+
+  function onClearSelection() {
+    if (state.deleting) return;
+    selection.clear();
+    selectedMeta.clear();
+    renderSelection();
+  }
+
+  function onDeleteSelected() {
+    if (state.deleting) return;
+    const ids = nativeIds();
+    if (ids.length === 0) return;
+    if (ids.length > MAX_SELECTIONS) {
+      showLimit();
+      return;
+    }
+    openConfirm({
+      title: "Delete the selected snapshots?",
+      scope: selectedScope(ids),
+      label: "Delete " + ids.length,
+      count: ids.length,
+      body: { ids: ids },
+    });
+  }
+
+  /* The worker's ceiling, said in words rather than sent as a refusal: nothing
+   * is deleted and nothing is de-selected, so the operator keeps the ticks they
+   * already made and is told exactly what to do about them. */
+  function showLimit() {
+    showOutcome(
+      "warn",
+      "That would make " +
+        plural(selection.size, "selected snapshot") +
+        ", and one delete carries at most " +
+        MAX_SELECTIONS +
+        " ids. Nothing was deleted: clear the selection, or delete in smaller batches."
+    );
+  }
+
+  /* A tick on one row, wherever it was reached from. One delegated handler on the
+   * list itself, so a row that has just been built is already wired. */
+  function onRowCheck(event) {
+    const box = event.target.closest(".event__check");
+    if (!box || !el.events.contains(box)) return;
+    // While a delete is in flight every box is disabled, and a synthetic change is
+    // put back where it was rather than acted on: the body was already captured.
+    if (state.deleting) {
+      syncChecks();
+      return;
+    }
+    const id = checkIds.get(box);
+    if (id === undefined) return;
+
+    if (!box.checked) {
+      deselectRow(id);
+      renderSelection();
+      return;
+    }
+    const row = visibleRows().find((candidate) => candidate.id === id);
+    if (!row) {
+      // The row this box belongs to is no longer the one on screen, so its facts
+      // cannot be recorded. The box goes back rather than selecting what it names.
+      syncChecks();
+      return;
+    }
+    if (!selectRow(row)) {
+      box.checked = false;
+      renderSelection();
+      showLimit();
+      return;
+    }
+    renderSelection();
   }
 
   /* --------------------------------------------------------------- reads -- */
@@ -714,23 +1419,89 @@
     }
   }
 
-  async function readEvents() {
-    // The proxy pins the upstream query to the whole four-camera person
-    // payload, so one read covers every camera and switching the filter is a
-    // client-side re-slice rather than a second request that could land out of
-    // order with the one before it.
+  /* One page of the archive, {events, page, page_size, total, pages}, from the
+   * worker rather than from the raw event list. Every count has to be a whole
+   * number of the right size and a page has to sit inside the page count, so a
+   * decimal, a string, a missing field or a page past the end is a reply this
+   * page does not understand, never a total of zero and never a row list read
+   * from somewhere else. */
+  function usablePage(payload) {
+    if (!isObject(payload)) return null;
+    if (!Array.isArray(payload.events)) return null;
+    const page = wholeCount(payload.page);
+    const pageSize = wholeCount(payload.page_size);
+    const total = wholeCount(payload.total);
+    const pages = wholeCount(payload.pages);
+    if (page === null || pageSize === null || total === null || pages === null) return null;
+    if (pageSize < 1 || pages < 1 || page < 1 || page > pages) return null;
+    if (total < payload.events.length) return null;
+    return { events: payload.events, page: page, pageSize: pageSize, total: total, pages: pages };
+  }
+
+  /* The camera filter and the page number are the worker's business, so changing
+   * either is a new read rather than a re-slice of what is already on screen.
+   *
+   * One generation counter covers every read: a page walk is slow enough to still
+   * be in flight when the operator has moved on, and a reply that arrives late is
+   * dropped rather than filed under the page and camera that were asked for
+   * afterwards. It also means only the newest read owns the loading and error
+   * state, so a superseded one cannot clear a list that is still correct.
+   *
+   * transition is a move to a different page or camera, not a re-read of the page
+   * already on screen: the old rows leave immediately, because leaving them under
+   * a new page number is the one thing this must never do.
+   *
+   * Reports whether the list it left behind is a list that was actually read, so
+   * a caller can say so rather than assume it. A failed read is never presented as
+   * a refreshed list. */
+  async function readEvents(transition) {
+    const generation = ++state.generation;
+    const page = state.page;
+    const camera = state.filter;
+
+    if (transition) {
+      state.rows = [];
+      state.eventsRead = false;
+      state.eventsError = null;
+      renderedSignature = null;
+    }
+    state.eventsLoading = true;
+    // Only the archive controls move here: the notice, the status bar and the
+    // Retry button belong to the read loop, which is not what is being waited on.
+    renderEvents();
+
+    const stale = { ok: false, error: "a newer read was still in flight", stale: true };
     try {
-      const payload = await fetchJSON("/api/events");
-      if (!Array.isArray(payload)) throw new Error("unexpected response shape");
-      const rows = payload.filter((event) => zoneEvent(event, cameraSet(CAMERAS)));
-      state.lastEvents = { rows: rows };
+      const payload = await fetchJSON(
+        EVENTS_PATH + "?page=" + page + "&camera=" + encodeURIComponent(camera),
+        ARCHIVE_READ_MS
+      );
+      if (generation !== state.generation) return stale;
+      const parsed = usablePage(payload);
+      if (!parsed) throw new Error("unexpected response shape");
+
+      state.rows = parsed.events.filter((event) => listedEvent(event));
+      // The worker's own page number is adopted, which is how a page that has just
+      // been deleted out from under the operator is clamped to the last one.
+      state.page = parsed.page;
+      state.pageSize = parsed.pageSize;
+      state.total = parsed.total;
+      state.pages = parsed.pages;
       state.eventsRead = true;
       state.eventsError = null;
+      return { ok: true, error: null };
     } catch (err) {
-      // An unreadable list is an error, not an empty zone.
-      state.lastEvents = null;
+      if (generation !== state.generation) return stale;
+      // An unreadable page is an error, not an empty archive.
+      state.rows = [];
       state.eventsRead = false;
       state.eventsError = { message: describe(err) };
+      return { ok: false, error: describe(err) };
+    } finally {
+      if (generation === state.generation) {
+        state.eventsLoading = false;
+        render();
+      }
     }
   }
 
@@ -771,7 +1542,7 @@
     } else if (state.eventsError) {
       tone = "warn";
       text =
-        "Recent detections unavailable (" + state.eventsError.message +
+        "Saved detections unavailable (" + state.eventsError.message +
         "). The list below is not a current answer.";
     } else {
       tone = "warn";
@@ -879,7 +1650,13 @@
     polling = true;
     setBusy(true);
     try {
-      await Promise.all([readStats(), readEvents()]);
+      /* The archive is only re-read on its latest page. A page the operator is
+       * reading through history holds still until they ask for another one, and
+       * the status and the live pictures are unaffected either way. */
+      await Promise.all([
+        readStats(),
+        state.page === 1 ? readEvents(false) : Promise.resolve(),
+      ]);
     } finally {
       polling = false;
       setBusy(false);
@@ -888,9 +1665,10 @@
     schedulePoll(POLL_MS);
   }
 
-  /* Players are rebuilt whenever the tab comes back: a picture left on screen
-   * through a long background tab is not evidence that the stream is still
-   * running, and the native element may have dropped its socket meanwhile. */
+  /* The Retry button's own rebuild, and nothing else: it clears the attempt
+   * count and remounts every card, so an operator asking for a fresh start gets
+   * one. Resuming from a hidden tab deliberately does not come through here,
+   * because that would drop four working streams to prove nothing. */
   function rebuildLive() {
     for (const card of cards.values()) card.live.attempts = 0;
     mountAll(true);
@@ -911,21 +1689,50 @@
 
   /* --------------------------------------------------------------- wiring -- */
 
+  /* Page and camera are both the worker's to answer, so a move is a new read.
+   * Nothing here touches a live player: turning a page is a different thing from
+   * reconnecting four cameras. */
+  function goToPage(target) {
+    if (state.deleting || state.eventsLoading) return;
+    const wanted = Math.min(Math.max(target, 1), state.pages);
+    if (wanted === state.page) return;
+    state.page = wanted;
+    readEvents(true);
+  }
+
   el.filters.addEventListener("click", (event) => {
     const button = event.target.closest("button[data-camera]");
     if (!button) return;
     const chosen = button.dataset.camera;
     if (chosen !== "all" && REQUIRED_ZONE[chosen] === undefined) return;
     state.filter = chosen;
+    // The filtered archive has its own paging, so page 7 of the old set is not a
+    // page of the new one. The selection is left alone: a camera filter changes
+    // what is on screen, never what the operator has already decided.
+    state.page = 1;
     for (const other of el.filters.querySelectorAll("button[data-camera]")) {
       const on = other === button;
       other.classList.toggle("is-on", on);
       other.setAttribute("aria-pressed", on ? "true" : "false");
     }
-    // Re-slice what is already on screen immediately, then refresh in the
-    // background.
-    renderEvents();
-    if (!polling) schedulePoll(0);
+    readEvents(true);
+  });
+
+  el.pagePrev.addEventListener("click", () => {
+    goToPage(state.page - 1);
+  });
+
+  el.pageNext.addEventListener("click", () => {
+    goToPage(state.page + 1);
+  });
+
+  el.pageSelect.addEventListener("change", () => {
+    goToPage(Number(el.pageSelect.value));
+  });
+
+  // The newest page, asked for rather than waited for.
+  el.pageLatest.addEventListener("click", () => {
+    goToPage(1);
   });
 
   el.retry.addEventListener("click", () => {
@@ -934,11 +1741,38 @@
     start();
   });
 
+  // One delegated handler for every row box, including rows built a moment ago.
+  el.events.addEventListener("change", onRowCheck);
+
+  el.selectShown.addEventListener("change", onSelectShown);
+  el.clearSelection.addEventListener("click", onClearSelection);
+  el.deleteSelected.addEventListener("click", onDeleteSelected);
+  el.deleteAll.addEventListener("click", confirmArchiveDelete);
+
+  // The only place a delete is ever sent: the dialog's own confirm button.
+  el.confirmButton.addEventListener("click", () => {
+    runDelete();
+  });
+
+  // Escape, or the cancel button: the operator withdrew. Nothing is sent now and
+  // nothing is remembered for later. While the request is in flight there is
+  // nothing left to withdraw, so the dialog is held shut until the POST settles.
+  el.dialog.addEventListener("cancel", (event) => {
+    if (state.deleting) {
+      event.preventDefault();
+      return;
+    }
+    intent = null;
+  });
+
   document.addEventListener("visibilitychange", () => {
+    // Coming back only resumes the read loop. A player that is still healthy
+    // through a hidden tab keeps the picture it already has rather than being
+    // torn down and reconnected, and a card that did fail has already been
+    // rebuilt by the watchdog above or is waiting for the Retry button.
     if (document.hidden) {
       stop();
     } else {
-      rebuildLive();
       start();
     }
   });

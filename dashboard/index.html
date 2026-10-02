@@ -4,10 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="dark" />
-    <title>Surveillance Console — camera overview</title>
+    <title>Surveillance Console — camera overview and snapshot review</title>
     <meta
       name="description"
-      content="Local camera overview: live main-stream video for four cameras and recent person detections in monitored areas."
+      content="Local camera overview: live main-stream video for four cameras, paged through saved person detections, and manual review of saved snapshots."
     />
     <meta name="robots" content="noindex, nofollow" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
@@ -135,10 +135,10 @@
 
       <section class="section" aria-labelledby="events-heading">
         <div class="section__head">
-          <h2 class="section__title" id="events-heading">Recent zone detections</h2>
+          <h2 class="section__title" id="events-heading">Saved detections</h2>
           <p class="section__lede">
-            People seen in monitored areas. Flagged snapshots are kept until you delete them after
-            review.
+            An ordinary detection in a monitored area expires after 6 h. One tracked for
+            60 seconds in an area is held until you delete it.
           </p>
         </div>
 
@@ -160,11 +160,72 @@
           </button>
         </div>
 
-        <p class="readout events__tally" id="events-tally">Waiting for detection data.</p>
+        <div class="review">
+          <p class="readout events__tally" id="events-tally">Waiting for detection data.</p>
+
+          <details class="readout events__rules">
+            <summary>How these badges and the 60 seconds are worked out</summary>
+            <p>
+              <strong>6-hour retention</strong> expires on its own ·
+              <strong>Loitering ≥60 s</strong> is the camera service&rsquo;s own tally of
+              frames it tracked inside a monitored area, so it is not a claim that anyone
+              stood still · <strong>Kept for review</strong> is held until you delete it ·
+              <strong>Previously kept</strong> is held from before the 60 s rule existed. In
+              this prototype the monitored area is the full camera frame.
+            </p>
+          </details>
+
+          <div class="review__bar">
+            <label class="check">
+              <input class="check__input" type="checkbox" id="select-shown" disabled />
+              <span class="check__label">Select all shown</span>
+            </label>
+            <button class="btn" type="button" id="clear-selection" disabled>
+              Clear selection
+            </button>
+            <p class="readout review__count" id="selection-count">0 selected</p>
+            <button class="btn" type="button" id="delete-selected" disabled>
+              Delete selected
+            </button>
+          </div>
+
+          <p
+            class="readout review__result"
+            id="delete-result"
+            data-tone="pending"
+            role="status"
+            aria-live="polite"
+          ></p>
+
+          <div class="review__bar">
+            <button class="btn" type="button" id="page-prev" disabled>Previous</button>
+            <button class="btn" type="button" id="page-next" disabled>Next</button>
+            <label class="check">
+              <span class="check__label">Page</span>
+              <select id="page-select" disabled></select>
+            </label>
+            <button class="btn" type="button" id="page-latest" disabled>Latest</button>
+          </div>
+        </div>
 
         <ul class="events" id="events" hidden></ul>
 
-        <p class="events__empty" id="events-empty" hidden>No zone detections yet</p>
+        <p class="events__empty" id="events-empty" hidden>No saved detections yet</p>
+
+        <section class="archive" aria-labelledby="archive-heading">
+          <div class="section__head">
+            <h3 class="archive__title" id="archive-heading">Saved snapshot archive</h3>
+            <p class="section__lede">
+              A separate action from ticking rows above: it covers every saved
+              snapshot on all four cameras, on every page of the archive and
+              including the ones held for review. It is never triggered by a
+              selection.
+            </p>
+          </div>
+          <button class="btn btn--danger" type="button" id="delete-all">
+            Delete all saved snapshots
+          </button>
+        </section>
       </section>
     </main>
 
@@ -174,14 +235,39 @@
         <span aria-hidden="true">·</span>
         <span>Local prototype</span>
         <span aria-hidden="true">·</span>
-        <span>Read-only view</span>
+        <span>Manual snapshot review</span>
         <span aria-hidden="true">·</span>
         <span>Email alerts not enabled</span>
       </p>
     </footer>
 
+    <dialog
+      class="confirm"
+      id="delete-dialog"
+      aria-labelledby="delete-dialog-title"
+      aria-describedby="delete-dialog-note"
+    >
+      <form method="dialog" class="confirm__form">
+        <h2 class="confirm__title" id="delete-dialog-title">Delete snapshots?</h2>
+        <p class="confirm__scope" id="delete-dialog-scope"></p>
+        <p class="confirm__note" id="delete-dialog-note">
+          Deleting is immediate and cannot be undone. Nothing is sent until you
+          confirm, and a request that fails is never sent again.
+        </p>
+        <div class="confirm__actions">
+          <button class="btn" type="submit" id="delete-cancel" autofocus>Cancel</button>
+          <button class="btn btn--confirm" type="button" id="delete-confirm">
+            <span id="delete-confirm-label">Delete</span>
+          </button>
+        </div>
+      </form>
+    </dialog>
+
     <template id="event-item">
       <li class="event">
+        <label class="event__pick">
+          <input class="event__check" type="checkbox" />
+        </label>
         <a class="event__shot" target="_blank" rel="noopener noreferrer">
           <img class="event__img" alt="" loading="lazy" />
         </a>
@@ -189,7 +275,8 @@
           <p class="event__head">
             <span class="event__camera"></span>
             <span class="event__zone"></span>
-            <span class="event__kept" hidden>Kept for review</span>
+            <span class="event__flag" hidden>Loitering ≥60 s</span>
+            <span class="event__kept">6-hour retention</span>
           </p>
           <p class="readout event__time"></p>
         </div>

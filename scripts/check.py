@@ -6,10 +6,25 @@ the two boundaries a browser actually touches. Frigate's stats history embeds
 cpu_usages.cmdline (RTSP URLs with camera passwords), and the live player is
 go2rtc's own bundled script, so serving raw stats, forwarding a client's ?keys=,
 opening /api/config, or letting a URL reach the page with userinfo leaks
-credentials to any page in the browser. No internals mirrored, nothing else
-covers the server-side key allowlist or the pinned live paths, no production test
-seams needed. A cold Frigate FAILS rather than skipping, so this never exits 0
-while validation is unperformed.
+credentials to any page in the browser. The second boundary is the one write this
+proxy now carries: an exact delete path to the retention worker, which must accept
+a POST and refuse every other method, a foreign origin, a missing action header, a
+mislabelled body, an unknown scope and an id that is not a tracker id. The third
+is the one read that forwards a query string at all: the paginated events page,
+which the proxy hands to that same validating worker rather than to raw Frigate, so
+what comes back has to be a bounded 25-row page, filtered to the camera that was
+asked for, and a write on that path still has to be a 405. No internals
+mirrored, nothing else covers the server-side key allowlist or the pinned live paths,
+no production test seams needed. A cold Frigate FAILS rather than skipping, so this
+never exits 0 while validation is unperformed.
+
+Every request below is read-only except the delete refusals, which carry bodies that
+cannot delete anything.
+
+Every request below that touches the delete path carries a body that cannot delete
+anything: an id that is well formed but cannot exist, an empty scope, or a scope the
+contract does not define. Nothing here ever deletes a snapshot, whatever the guards
+under test do.
 
 This is a transport check. It does not open a WebSocket and cannot prove that any
 frame was decoded: live playback is recorded in docs/validation.md from a
@@ -29,6 +44,17 @@ import urllib.request
 CAMERAS = ("camera_1", "camera_2", "camera_3", "camera_4")
 DENIED = ("/api/config/raw", "/api/stats/history", "/api/logs", "/api/restart", "/nginx.conf",
           "/api/camera_5/latest.jpg",
+          # Frigate's own event writes: this proxy has one delete path of its own,
+          # pinned to the retention worker, and no route to Frigate's retain or
+          # delete by tracker id.
+          "/api/events/1790910000.123456-abc123/retain",
+          "/api/events/1790910000.123456-abc123/delete",
+          "/api/events/1790910000.123456-abc123",
+          # The snapshot surface is three exact paths. Anything else under it, any
+          # sub-path of the paginated read, and the generic archive name, must
+          # not be reachable from a browser.
+          "/api/snapshots", "/api/snapshots/", "/api/snapshots/unknown",
+          "/api/snapshots/events/1",
           # go2rtc's own surface: the proxy pins one script and four live paths, so
           # its config, its stream list, its control WebSocket and any other camera
           # must all be unreachable from here.
@@ -42,7 +68,22 @@ ALLOWED = {"cameras": {"camera_fps", "process_fps", "detection_enabled"},
 # scalar, not a per-name object map, so its fields get their own allowlist and check.
 SCALARS = {"last_updated"}
 EVENT_ID = re.compile(r"^[0-9]+(\.[0-9]+)?-[a-z0-9]{6}$")  # native id, not the old 16-hex one
-REQUIRED_ZONE = {cam: f"{cam}_area" for cam in CAMERAS}
+SUMMARY_PATH = "/api/snapshots/summary"
+EVENTS_PATH = "/api/snapshots/events"
+DELETE_PATH = "/api/snapshots/delete"
+# The page the worker returns, whatever is asked for. This is the bound that makes
+# the forwarded query string safe: the widest read anyone can ask for is one page.
+PAGE_SIZE = 25
+# A tracker id of the right shape at a frame time no camera ever had. Every refusal
+# below is built on it, so each one fails for the guard it names and not because the
+# body happened to be unusable.
+PROBE_ID = "0.000000-zzzzzz"
+# Any of these is a refusal. Which one a guard picks is the worker's business.
+REFUSED = (400, 403, 405, 415, 422)
+# The ordinary camera_N_area zone is what makes a row worth listing, but entering it
+# is not a protection: those detections expire after six hours. What the worker holds
+# for review is the secondary camera_N_loitering zone, so that is what is asserted.
+LOITERING_ZONE = {cam: f"{cam}_loitering" for cam in CAMERAS}
 # Only an rtsp:// URL that carries userinfo is a leak. A bare rtsp:// mention in a
 # comment or a library's own docs is not a secret and must not fail this check.
 RTSP_URL = re.compile(r"rtsp://\S+")
@@ -52,14 +93,22 @@ RTSP_USERINFO = re.compile(r"^rtsp://[^/@\s]+@")
 SETTLED_S = 60
 
 
-def get(base, path, method="GET"):
+def get(base, path, method="GET", body=None, headers=None):
     """(status, lowercased headers, body bytes); HTTPError is returned, transport errors raise."""
-    req = urllib.request.Request(base.rstrip("/") + path, method=method)
+    req = urllib.request.Request(base.rstrip("/") + path, data=body, method=method,
+                                 headers=headers or {})
     try:
-        with urllib.request.urlopen(req, timeout=10) as res:
+        with urllib.request.urlopen(req, timeout=70) as res:
             return res.status, {k.lower(): v for k, v in res.headers.items()}, res.read()
     except urllib.error.HTTPError as err:
         return err.code, {k.lower(): v for k, v in (err.headers or {}).items()}, err.read()
+
+
+def delete_request(base, payload, headers=None):
+    """A POST to the delete path. An empty header value is how urllib says do not send it."""
+    sent = {"Content-Type": "application/json", "X-Surveillance-Action": "delete"}
+    sent.update(headers or {})
+    return get(base, DELETE_PATH, method="POST", body=json.dumps(payload).encode(), headers=sent)
 
 
 def main():
@@ -81,6 +130,12 @@ def main():
     assert headers.get("referrer-policy", "").lower() == "no-referrer" and headers.get("x-content-type-options", "").lower() == "nosniff", f"referrer-policy {headers.get('referrer-policy')!r} / nosniff {headers.get('x-content-type-options')!r}"
     print(f"ok  root 200; frame-ancestors {frame.group(1)}, media-src 'self' blob:, referrer no-referrer, nosniff")
 
+    # The snapshot reads are exact paths. Every DENIED entry is asserted denied
+    # against the live server a few lines below, so an allowed read that drifted
+    # into that list would fail there — this names that requirement instead of
+    # leaving it to a future editor to rediscover.
+    assert not {SUMMARY_PATH, EVENTS_PATH} & set(DENIED), \
+        "an allowed snapshot read is in the deny list"
     for path in DENIED:
         status, _h, _b = get(base, path)
         assert status in (403, 404, 405), f"{path}: HTTP {status}, expected a denial"
@@ -159,23 +214,23 @@ def main():
         assert status == 200 and body[:2] == b"\xff\xd8", f"snapshot {eid}: HTTP {status}, not a JPEG"
         print(f"ok  event {eid} snapshot 200 JPEG")
 
-    # Retention, as the browser sees it: a snapshot a person triggered in a camera's
-    # own zone must be flagged kept, or the periodic cleanup would take it first.
-    # What this proves is that the flag reached the page, not that the worker set
-    # it: the worker pins on its own cadence, and until it has run there is nothing
-    # here to assert.
+    # Retention, as the browser sees it: a snapshot a person held for a minute in a
+    # camera's own zone must be flagged kept, or the periodic cleanup would take it
+    # first. What this proves is that the flag reached the page, not that the worker
+    # set it: the worker pins on its own cadence, and until it has run there is
+    # nothing here to assert.
     now = time.time()
     settled = [e for e in events
                if isinstance(e.get("end_time"), (int, float))
                and not isinstance(e.get("end_time"), bool)
                and now - e["end_time"] >= SETTLED_S
-               and REQUIRED_ZONE.get(e.get("camera")) in (e.get("zones") or [])]
+               and LOITERING_ZONE.get(e.get("camera")) in (e.get("zones") or [])]
     if not settled:
-        print(f"NOT TESTED  retained snapshots: no required-zone event ended over {SETTLED_S}s ago")
+        print(f"NOT TESTED  retained snapshots: no loitering-zone event ended over {SETTLED_S}s ago")
     else:
         unpinned = [e["id"] for e in settled if e.get("retain_indefinitely") not in (True, 1)]
-        assert not unpinned, f"{len(unpinned)} settled required-zone event(s) are not retained: {unpinned[:3]}"
-        print(f"ok  all {len(settled)} settled required-zone event(s) are flagged kept for review")
+        assert not unpinned, f"{len(unpinned)} settled loitering-zone event(s) are not retained: {unpinned[:3]}"
+        print(f"ok  all {len(settled)} settled loitering-zone event(s) are flagged kept for review")
 
     for cam in CAMERAS:
         status, _h, body = get(base, f"/api/{cam}/latest.jpg")
@@ -183,8 +238,145 @@ def main():
     print(f"ok  all {len(CAMERAS)} latest.jpg previews 200 JPEG")
     print("note  /live/ is a WebSocket upgrade this script never opens: playback was seen in a "
           "browser, and it is recorded there, not proved by this run")
+    check_summary(base)
+    check_events(base)
+    check_delete_guards(base)
     print("\nPASS  every assertion held")
     return 0
+
+
+def check_summary(base):
+    """The archive count the confirmation is built on: a count and a cutoff, nothing else."""
+    status, _h, body = get(base, SUMMARY_PATH)
+    assert status == 200, f"{SUMMARY_PATH}: HTTP {status}"
+    payload = json.loads(body.decode("utf-8", "replace"))
+    assert isinstance(payload, dict), f"{SUMMARY_PATH}: {type(payload).__name__}, expected an object"
+    extra = set(payload) - {"count", "before"}
+    assert not extra, f"{SUMMARY_PATH} carries {sorted(extra)} beyond the count and the cutoff"
+    count, before = payload.get("count"), payload.get("before")
+    assert isinstance(count, (int, float)) and not isinstance(count, bool) and count >= 0, \
+        f"{SUMMARY_PATH} count {count!r}, expected a number of snapshots"
+    assert isinstance(before, (int, float)) and not isinstance(before, bool) and before > 0, \
+        f"{SUMMARY_PATH} before {before!r}, expected unix seconds"
+    # A cutoff a long way ahead of now would scope a delete to nothing at all; one
+    # behind it is the whole archive, which the operator has to see a count for. A
+    # little slack, because this runs on a different container than the worker.
+    assert before <= time.time() + 60, f"{SUMMARY_PATH} cutoff {before} is in the future"
+    print(f"ok  {SUMMARY_PATH} 200: count {count:g}, cutoff {before:g} (unix seconds), no other field")
+
+
+def read_page(label, payload):
+    """The {events, page, page_size, total, pages} envelope of one page read, checked."""
+    assert isinstance(payload, dict), f"{label}: {type(payload).__name__}, expected an object"
+    extra = set(payload) - {"events", "page", "page_size", "total", "pages"}
+    assert not extra, f"{label} carries {sorted(extra)} beyond the documented envelope"
+    events, page, size, total, pages = (payload.get(k) for k in
+                                        ("events", "page", "page_size", "total", "pages"))
+    assert isinstance(events, list), f"{label} events is {type(events).__name__}, expected a list"
+    for name, value in (("page", page), ("page_size", size), ("total", total), ("pages", pages)):
+        assert isinstance(value, int) and not isinstance(value, bool) and value >= 0, \
+            f"{label} {name} {value!r}, expected a non-negative integer"
+    # The page that comes back is the page that was asked for, at the fixed width:
+    # the proxy forwarded the query and the gateway decided, and neither of them
+    # may quietly serve a different page or a longer one.
+    assert page == 1, f"{label} reports page {page}, asked for page 1"
+    assert size == PAGE_SIZE, f"{label} page_size {size}, expected a fixed {PAGE_SIZE}"
+    assert len(events) <= size, f"{label} returned {len(events)} rows on a {size}-row page"
+    # A short first page is the end of the walk and the total is what is on it; a
+    # full one is not the end, so the total has to be larger. Anything else means
+    # total and the rows on the page disagree. A camera with nothing on it still
+    # answers one empty page at page 1 rather than page 0, so total 0 is a page
+    # here and not a contradiction.
+    assert total == len(events) or len(events) == size, \
+        f"{label} says total {total} but page 1 holds {len(events)} rows"
+    # The contract floors the count at one page, because an empty result is still
+    # one page: pages = max(1, ceil(total / page_size)). Without that floor this
+    # would demand 0 pages of a camera with no rows, and fail a correct answer.
+    assert pages == max(1, -(-total // size)), \
+        f"{label} pages {pages} does not follow from total {total} at {size} rows a page"
+    return events, total
+
+
+def check_events(base):
+    """The one read that forwards a query: shape, the page served, the camera filter.
+
+    The proxy hands ?page and ?camera to the retention worker and to nothing else,
+    so this checks the properties that forwarding is only safe if the worker holds:
+    a page of a fixed size, rows belonging to the camera that was asked for, a
+    filter that can only narrow the unfiltered total, and a 400 rather than a walk
+    when the arguments are not ones the worker accepts. Every request is a GET on
+    a read path, so nothing here can change anything on disk.
+    """
+    status, _h, body = get(base, f"{EVENTS_PATH}?page=1&camera=all")
+    assert status == 200, f"{EVENTS_PATH}?page=1&camera=all: HTTP {status}"
+    events, total = read_page("camera=all", json.loads(body.decode("utf-8", "replace")))
+    assert all(isinstance(e, dict) for e in events), "camera=all returned a row that is not an object"
+
+    # All four camera filters, one read each, and the filter is the worker's: a row
+    # tagged for another camera, or a filtered total above the unfiltered one, means
+    # the page is not what the browser asked for.
+    for cam in CAMERAS:
+        status, _h, body = get(base, f"{EVENTS_PATH}?page=1&camera={cam}")
+        assert status == 200, f"{EVENTS_PATH}?page=1&camera={cam}: HTTP {status}"
+        rows, cam_total = read_page(f"camera={cam}", json.loads(body.decode("utf-8", "replace")))
+        assert all(isinstance(r, dict) for r in rows), f"camera={cam} returned a row that is not an object"
+        wrong = sorted({str(r.get("camera")) for r in rows} - {cam})
+        assert not wrong, f"camera={cam} returned {len(rows)} row(s) tagged {wrong}"
+        assert cam_total <= total, f"camera={cam} total {cam_total} is above the unfiltered total {total}"
+    print(f"ok  {EVENTS_PATH} 200: {len(events)} of {total} rows on page 1 of a fixed {PAGE_SIZE}-row page, "
+          f"and all {len(CAMERAS)} camera filters returned only their own rows")
+
+    # What the gateway refuses rather than serves: a camera that is not one of the
+    # four, an argument it does not define, and an attempt to widen the page. A
+    # refusal here is a validation decision, so it must be the 400 and not a 200
+    # with something in it.
+    refusals = ("page=1&camera=camera_5", "page=1&archive=all", "page=1&camera=all&limit=500")
+    for query in refusals:
+        status, _h, _b = get(base, f"{EVENTS_PATH}?{query}")
+        assert status == 400, f"{EVENTS_PATH}?{query}: HTTP {status}, expected 400 from the validating gateway"
+
+    # A read is still a read. The method allowlist refuses these before the location
+    # is even selected, so the worker is never asked to take one.
+    for method in ("POST", "PUT", "PATCH", "DELETE"):
+        status, _h, _b = get(base, f"{EVENTS_PATH}?page=1&camera=all", method=method)
+        assert status == 405, f"{method} {EVENTS_PATH}: HTTP {status}, expected 405"
+    print(f"ok  {EVENTS_PATH} refuses POST, PUT, PATCH and DELETE with 405, and answers 400 for a camera "
+          f"outside the four, an undefined argument, and an attempt to widen the page")
+
+
+def check_delete_guards(base):
+    """The one write path: POST only, and only a well-formed, in-origin request.
+
+    Each case below is well formed in every respect except the guard it names, so a
+    refusal is attributable to that guard rather than to a body that was unusable
+    anyway. None of them can delete anything: the ids cannot exist and the scopes are
+    undefined.
+    """
+    for method in ("GET", "HEAD", "PUT", "PATCH", "DELETE"):
+        status, _h, _b = get(base, DELETE_PATH, method=method)
+        assert status == 405, f"{method} {DELETE_PATH}: HTTP {status}, expected 405"
+    for method in ("POST", "PUT", "DELETE"):
+        status, _h, _b = get(base, SUMMARY_PATH, method=method)
+        assert status == 405, f"{method} {SUMMARY_PATH}: HTTP {status}, expected 405"
+
+    well_formed = {"ids": [PROBE_ID]}
+    refusals = (
+        ("a foreign origin", well_formed, {"Origin": "https://not-this-dashboard.example"}),
+        ("no action header", well_formed, {"X-Surveillance-Action": ""}),
+        ("a text content type", well_formed, {"Content-Type": "text/plain"}),
+        ("an id that is not a tracker id", {"ids": ["1790910000.123456-abc12"]}, {}),
+        ("an id that is a path", {"ids": ["../config/config.yml"]}, {}),
+        ("an empty scope", {}, {}),
+        ("a scope that is neither ids nor all", {"everything": True}, {}),
+    )
+    for label, payload, headers in refusals:
+        status, _h, _b = delete_request(base, payload, headers)
+        assert status in REFUSED, f"delete with {label}: HTTP {status}, expected one of {REFUSED}"
+    print(f"ok  {DELETE_PATH} refuses GET, HEAD, PUT, PATCH and DELETE with 405 and "
+          f"{SUMMARY_PATH} refuses POST, PUT and DELETE with 405")
+    print(f"ok  {len(refusals)} refused delete requests, none of which could delete anything: a "
+          f"foreign origin, no action header, a text content type, two ids that are not tracker "
+          f"ids, an empty scope, and a scope the contract does not define")
 
 
 if __name__ == "__main__":
