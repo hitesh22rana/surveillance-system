@@ -23,6 +23,7 @@ against this same imitation rather than a second one.
 import argparse
 import contextlib
 import http.server
+import io
 import json
 import math
 import subprocess
@@ -43,7 +44,11 @@ TIED = BASE_TIME + 470  # every tied event shares this start_time
 
 
 def event(tag, camera, start, zones=None, label="person", snapshot=True, **extra):
-    """A Frigate-shaped event: native id, one label, a bool has_snapshot, a zones list."""
+    """A Frigate-shaped event: native id, one label, a bool has_snapshot, a zones list.
+
+    The default zone is that camera's own restricted zone, which is what a person
+    entry looks like once somebody has armed that camera.
+    """
     payload = {
         "id": f"{start}.123456-{tag}",
         "camera": camera,
@@ -51,7 +56,7 @@ def event(tag, camera, start, zones=None, label="person", snapshot=True, **extra
         "start_time": float(start),
         "end_time": float(start) + 2.5,
         "label": label,
-        "zones": [f"{camera}_loitering"] if zones is None else list(zones),
+        "zones": [f"{camera}_restricted"] if zones is None else list(zones),
         "has_snapshot": snapshot,
         "snapshot": f"{camera}/snapshot.jpg" if snapshot else None,
         "type": "object",
@@ -61,9 +66,42 @@ def event(tag, camera, start, zones=None, label="person", snapshot=True, **extra
     return payload
 
 
+# A marker that must never appear in anything the gateway answers. The config is
+# where Frigate keeps RTSP URLs with passwords, so it is the one body this check
+# can prove does not travel: the fake carries it, and no reply may echo it.
+CREDENTIAL_MARKER = "rtsp://cam-user:CREDENTIAL-MARKER@192.0.2.10:554/live"
+
+
+def config_payload(zones=True):
+    """A Frigate-shaped /api/config, with the credential marker in it.
+
+    zones=True gives both entry cameras the restricted zone they need. Turning it
+    off is the "not configured yet" case the Arm control has to refuse.
+    """
+    cameras = {}
+    for camera in ("camera_1", "camera_2", "camera_3", "camera_4"):
+        block = {
+            "ffmpeg": {"inputs": [{"path": CREDENTIAL_MARKER, "roles": ["detect"]}]},
+            "objects": {"track": ["person"]},
+            "zones": {},
+            "review": {"alerts": {"enabled": False}},
+            "snapshots": {"enabled": True, "retain": {"default": 0.25}},
+            "record": {"enabled": False},
+        }
+        if zones and camera in ("camera_1", "camera_4"):
+            block["zones"][f"{camera}_restricted"] = {
+                "coordinates": "0,0,1,0,1,1,0,1",
+                "inertia": 3,
+                "loitering_time": 0,
+                "objects": ["person"],
+            }
+        cameras[camera] = block
+    return {"cameras": cameras, "mqtt": {"enabled": False}}
+
+
 def tied_group():
     """Seven events sharing one start_time: four pages at PAGE_SIZE 2."""
-    return [event(f"tied{n:02d}", "camera_2", TIED) for n in range(1, 8)]
+    return [event(f"tied{n:02d}", "camera_1", TIED) for n in range(1, 8)]
 
 
 def tied_fixture():
@@ -71,21 +109,41 @@ def tied_fixture():
     return [
         event("kilo01", "camera_1", BASE_TIME + 500),
         event("kilo02", "camera_4", BASE_TIME + 490),
-        event("kilo03", "camera_3", BASE_TIME + 480),
+        event("kilo03", "camera_4", BASE_TIME + 480),
         *tied_group(),
         event("old001", "camera_1", BASE_TIME + 400),
     ]
 
 
-def zone_fixture():
-    """Three person snapshots, each qualifying on camera, snapshot and label, so the
-    zone is the only thing left to decide: one that merely entered the ordinary
-    area zone, one that loitered in another camera's loitering zone, and one that
-    loitered in its own."""
+def entry_fixture(armed_at):
+    """Twelve rows around one arming moment, so the boundary is the only variable.
+
+    Rows before armed_at are inside the pass's six hour lookback, so each one is
+    refused for being old rather than for being unread: an event that began
+    before somebody switched a camera on is not one they switched on to keep.
+    Rows after it are the same shapes one second later. Every tag is exactly six
+    lowercase alphanumerics, or the row would be counted as unaddressable instead
+    of reaching the check it is here for.
+    """
+    def before(tag, camera, n, **extra):
+        return event(tag, camera, armed_at - 30 - n, **extra)
+
+    def after(tag, camera, n, **extra):
+        return event(tag, camera, armed_at + 1 + n, **extra)
+
     return [
-        event("areav1", "camera_1", BASE_TIME + 500, zones=["camera_1_area"]),
-        event("loit01", "camera_2", BASE_TIME + 490, zones=["camera_1_loitering"]),
-        event("loit02", "camera_3", BASE_TIME + 480, zones=["camera_3_area", "camera_3_loitering"]),
+        after("newc01", "camera_1", 9, zones=["camera_1_restricted"]),        # 0  pins
+        after("newc04", "camera_4", 8, zones=["camera_4_restricted"]),        # 1  pins
+        before("oldc01", "camera_1", 7, zones=["camera_1_restricted"]),       # 2  before arming
+        before("oldc04", "camera_4", 6, zones=["camera_4_restricted"]),       # 3  before arming
+        after("wrong1", "camera_4", 5, zones=["camera_1_restricted"]),        # 4  other zone
+        after("areaz1", "camera_1", 4, zones=["camera_1_area"]),              # 5  no restricted zone
+        after("loit60", "camera_1", 3, zones=["camera_1_loitering"]),         # 6  the removed 60 s rule
+        after("hous02", "camera_2", 2, zones=["camera_2_restricted"]),        # 7  no such camera
+        after("hous03", "camera_3", 1, zones=["camera_3_restricted"]),        # 8  no such camera
+        before("oldhou", "camera_2", 0, zones=["camera_2_restricted"]),       # 9  never arms
+        after("dog001", "camera_3", 0, label="dog", zones=["camera_3_restricted"]),  # 10 pins
+        after("kit001", "camera_4", 0, label="cat", zones=["camera_4_restricted"]),  # 11 refused
     ]
 
 
@@ -99,15 +157,16 @@ def unfiltered_fixture():
     unaddressable instead of reaching the check it is here for.
 
     The animal rows are the point of the last four: a cat on camera_3 and a dog on
-    camera_1 pin with no zone at all, a cat on camera_4 is refused because that
-    camera does not watch for animals, and a car is refused on both counts at once
-    because it is not a label this suite tracks.
+    camera_1 pin on sight, a cat on camera_4 is refused because that camera does
+    not watch for animals, and a car is refused on both counts at once because it
+    is not a label this suite tracks. No entry is armed in this fixture, so no
+    person row here pins at all.
     """
     return [
-        event("qual02", "camera_1", BASE_TIME + 500),                            # 0  pins
+        event("qual02", "camera_3", BASE_TIME + 500),                               # 0  no pin, disarmed
         event("noclip", "camera_2", BASE_TIME + 490, snapshot=False),               # 1  no snapshot
         event("cat001", "camera_3", BASE_TIME + 480, label="cat"),                 # 2  animal, pins
-        event("wrong2", "camera_4", BASE_TIME + 465, zones=["camera_1_loitering"]),  # 3  other zone
+        event("wrong2", "camera_4", BASE_TIME + 465, zones=["camera_1_restricted"]),  # 3  other zone
         event("nocam2", "camera_9", BASE_TIME + 460),                              # 4  no such camera
         event("kept02", "camera_1", BASE_TIME + 455, retain_indefinitely=True),     # 5  already pinned
         event("arch02", "camera_1", ANCIENT_TIME, retain_indefinitely=True),        # 6  behind the window
@@ -131,7 +190,7 @@ class FakeFrigate:
     ways a delete can come back 2xx-with-nothing-done or simply fail.
     """
 
-    def __init__(self, events, refusals=None, quiet_acks=None, filtering=True):
+    def __init__(self, events, refusals=None, quiet_acks=None, filtering=True, config="ok"):
         self.events = list(events)
         self.reads = []
         self.posts = []
@@ -141,6 +200,10 @@ class FakeFrigate:
         self.post_bodies = []  # every retain body, so no un-pin can hide in one
         self.attempts = {}
         self.filtering = filtering
+        # "ok" carries both entry cameras' restricted zones, "no-zones" is a valid
+        # config that has none of them, and "error" is the route failing outright.
+        self.config = config
+        self.config_reads = 0
         self.refusals = dict.fromkeys(refusals or ())
         self.quiet_acks = dict.fromkeys(quiet_acks or ())
         self.quiet_deletes = {}
@@ -186,6 +249,13 @@ class FakeFrigate:
 
     def handle(self, method, path, query, body=None):
         self.calls.append((method, path))
+        if method == "GET" and path == "/api/config":
+            # Read only, and the only route here the worker parses. It carries the
+            # credential marker, so a reply that echoed any of it would be caught.
+            self.config_reads += 1
+            if self.config == "error":
+                return 500, b'{"error": "unavailable"}'
+            return 200, json.dumps(config_payload(zones=self.config == "ok")).encode()
         if method == "GET" and path == "/api/events":
             return self._read(query)
         if method == "GET" and path.startswith("/api/events/"):
@@ -261,6 +331,29 @@ def run_retain(base, *extra):
     )
 
 
+def armed_state(base, *cameras, at=None):
+    """The production EntryState, armed the way the gateway arms it: readiness read
+    from the fake's own /api/config, then armed for the named cameras.
+
+    Arming has no command-line option and deliberately no seam for one, so a pass
+    that is armed is driven through the same object the gateway holds. Nothing is
+    restored into it: a second call reads the config again.
+    """
+    state = retain.EntryState()
+    api = retain.Api(base, 5)
+    now = time.time() if at is None else at
+    ready = state.ready(api, now)
+    assert any(ready.values()), f"the fake config left no entry camera ready: {state.snapshot()}"
+    for camera in cameras:
+        state.arm(camera, now)
+    return state
+
+
+def run_armed(base, state):
+    """The real run_pass in this process, over HTTP to the fake, with that state."""
+    return retain.run_pass(retain.Api(base, 5), int(PAGE_SIZE), 50, state, time.time())
+
+
 def clean(result):
     """Nothing printed may carry a body, a URL with userinfo, or a traceback."""
     text = result.stdout + result.stderr
@@ -291,8 +384,14 @@ def check_defaults():
     print("checking scripts/retain.py defaults")
     assert retain.API_BASE == "http://frigate:5000", f"default API base {retain.API_BASE!r}"
     assert retain.POLL_SECONDS == 30, f"default poll interval {retain.POLL_SECONDS!r}s"
-    assert set(retain.REQUIRED_ZONE.values()) == {f"camera_{n}_loitering" for n in range(1, 5)}, \
-        f"required zones {sorted(retain.REQUIRED_ZONE.values())}"
+    # Entry cameras 1 and 4 only, and no loitering zone anywhere: the 60 second
+    # full-frame rule is gone, so there is no such name left to require.
+    assert retain.ENTRY_CAMERAS == ("camera_1", "camera_4"), \
+        f"entry cameras {retain.ENTRY_CAMERAS}"
+    assert set(retain.RESTRICTED_ZONE.values()) == {"camera_1_restricted", "camera_4_restricted"}, \
+        f"restricted zones {sorted(retain.RESTRICTED_ZONE.values())}"
+    assert not set(retain.RESTRICTED_ZONE) & {"camera_2", "camera_3"}, \
+        "a house camera grew a restricted zone"
     assert retain.TARGET_LABEL == "person", f"target label {retain.TARGET_LABEL!r}"
     # The ten COCO 91 animal classes, in the labelmap's order, on cameras 1-3 only.
     assert retain.ANIMAL_LABELS == (
@@ -309,18 +408,23 @@ def check_defaults():
         f"camera_4 watches for animals: {retain.ANIMAL_CAMERAS}"
     assert retain.LOOKBACK_SECONDS == 6 * 3600, \
         f"the lookback must stay the six hours Frigate keeps a snapshot {retain.LOOKBACK_SECONDS}s"
-    print("ok  internal base http://frigate:5000, 30s cadence, four camera_N_loitering zones, "
-          "one person label plus 10 COCO animal labels on cameras 1-3, six hour lookback")
+    # The listable/deletable set is still all four cameras: what an operator may
+    # reach must not move when the retention policy does.
+    assert retain.CAMERAS == ("camera_1", "camera_2", "camera_3", "camera_4"), \
+        f"configured cameras {retain.CAMERAS}"
+    print("ok  internal base http://frigate:5000, 30s cadence, four cameras listed and "
+          "deletable, restricted zones on cameras 1 and 4 only and no loitering zone, one "
+          "person label plus 10 COCO animal labels on cameras 1-3, six hour lookback")
 
 
 def check_tied_walk():
     """Eleven events, seven of them sharing one start_time: every one is pinned."""
     fake = FakeFrigate(tied_fixture())
     with serving(fake) as base:
-        result = run_retain(base, "--once")
-        text = clean(result)
-        assert result.returncode == 0, f"exit {result.returncode}:\n{text}"
-        assert "11 unique event(s)" in text, f"the walk did not read all eleven rows:\n{text}"
+        # Armed on both entry cameras, before every row exists: these are all
+        # ordinary entries, so without an arming this walk would pin nothing and
+        # prove nothing about paging.
+        assert run_armed(base, armed_state(base, "camera_1", "camera_4", at=BASE_TIME - 60)) == 0
         missing = set(ids(fake)) - set(fake.pinned)
         assert not missing, f"the walk missed {sorted(missing)}, including the oldest tied row"
         assert len(fake.pinned) == 11, f"{len(fake.pinned)} pins for 11 events"
@@ -357,10 +461,15 @@ def check_cursor_shape(fake):
 
 
 def check_qualification():
-    """One event per decision on the native fields, and two pins that fail before they stick."""
+    """One event per decision on the native fields, and two pins that fail before they stick.
+
+    Nothing is armed here, so every person row in this fixture is a further
+    negative: a person in its own restricted zone pins nothing while its camera is
+    off, and only the two animals ever reach a POST.
+    """
     fake = FakeFrigate(unfiltered_fixture(), filtering=False)
-    qualifying = set(ids(fake, [0, 2, 14, *range(7, 14)]))
-    refused, quiet = ids(fake, [8])[0], ids(fake, [10])[0]
+    qualifying = set(ids(fake, [2, 14]))
+    refused, quiet = ids(fake, [2])[0], ids(fake, [14])[0]
     fake.refusals[refused] = 500
     fake.quiet_acks[quiet] = True
     with serving(fake) as base:
@@ -371,30 +480,33 @@ def check_qualification():
         assert f"{refused} (HTTP 500)" in text, f"the HTTP status was not reported:\n{text}"
         assert f"{quiet} (HTTP 2xx with no success:true in the reply)" in text, \
             f"success:false was not reported as a refusal:\n{text}"
-        assert "8 pinned, 1 already retained" in text, f"pass 1 pin summary:\n{text}"
+        assert "0 pinned, 0 already retained" in text, f"pass 1 pin summary:\n{text}"
+        assert "no entry camera armed" in text, f"the armed state was not logged:\n{text}"
         assert ("1 without a snapshot, 1 not a person or a tracked animal, "
                 "1 an animal on a camera that does not watch for them, "
-                "1 outside its own loitering zone, 1 from no configured camera") in text, \
+                "9 while entry review was disarmed, 0 before entry review was armed, "
+                "0 outside its own restricted zone, 1 on a camera with no restricted zone, "
+                "1 from no configured camera") in text, \
             f"pass 1 skip counts:\n{text}"
         # 16 of 17 rows: the retained row behind the six hour floor was never read.
         assert "16 unique event(s)" in text, f"the walk read rows it should not have:\n{text}"
-        assert sorted(fake.pinned) == sorted(qualifying - {refused, quiet}), \
-            f"pinned {sorted(fake.pinned)}"
-        assert len(fake.posts) == 10, f"{len(fake.posts)} pins attempted for 10 qualifying rows"
+        assert sorted(fake.pinned) == [], f"pinned {sorted(fake.pinned)} while both writes failed"
+        assert len(fake.posts) == 2, f"{len(fake.posts)} pins attempted for 2 animal rows"
         assert len(fake.posts) == len(set(fake.posts)), f"an event was pinned twice: {fake.posts}"
-        for never in ids(fake, [1, 3, 4, 5, 6, 15, 16]):
+        for never in ids(fake, [0, 1, 3, 4, 5, 6, 7, 9, 11, 12, 13, 15, 16]):
             assert never not in fake.posts, f"{never} was POSTed and should not have been"
         assert fake.deletes == [], f"the automated pass deleted {fake.deletes}"
-        print("ok  an unfiltered upstream: an untracked label, a snapshot-less row, a cat on "
-              "camera_4, a row outside its own zone, an unknown camera and an already-retained "
-              "row never POSTed, and the row behind the six hour floor was never read")
+        print("ok  a disarmed pass over an unfiltered upstream: eleven person rows, including "
+              "one in its own restricted zone and one already retained, never POSTed; so did "
+              "a snapshot-less row, a cat on camera_4, an unknown camera and an untracked "
+              "label; the row behind the six hour floor was never read")
 
         second = run_retain(base, "--once")
         text2 = clean(second)
         assert second.returncode == 0, f"pass 2 exited {second.returncode}:\n{text2}"
         assert second.stdout.count("pinned") == 1, f"pass 2 pinned more than its two retries:\n{text2}"
-        assert "2 pinned" in text2 and "9 already retained" in text2, f"pass 2 summary:\n{text2}"
-        assert len(fake.posts) == 12, f"{len(fake.posts)} pins in total, expected 10 then 2"
+        assert "2 pinned" in text2 and "0 already retained" in text2, f"pass 2 summary:\n{text2}"
+        assert len(fake.posts) == 4, f"{len(fake.posts)} pins in total, expected 2 then 2"
         assert set(map(json.dumps, fake.post_bodies)) == {'{"retain_indefinitely": true}'}, \
             f"a pin call carried something other than retain_indefinitely: {fake.post_bodies}"
         assert sorted(fake.pinned) == sorted(qualifying), \
@@ -406,36 +518,149 @@ def check_qualification():
               "pass can un-pin a record an earlier one kept")
 
 
-def check_zone_rule():
-    """Being on camera is not evidence. Only the loitering zone pins."""
-    fake = FakeFrigate(zone_fixture())
-    ordinary, foreign_zone, loitered = ids(fake, [0])[0], ids(fake, [1])[0], ids(fake, [2])[0]
+def check_disarmed_is_the_default():
+    """A --once pass comes back disarmed and pins nothing, however good a candidate."""
+    fake = FakeFrigate([event("just01", "camera_1", int(time.time()) - 60,
+                              zones=["camera_1_restricted"])])
     with serving(fake) as base:
         result = run_retain(base, "--once")
         text = clean(result)
         assert result.returncode == 0, f"exit {result.returncode}:\n{text}"
-        assert fake.pinned == [loitered], \
-            f"pinned {fake.pinned}, not only the event that loitered in its own zone"
-        assert ordinary not in fake.posts, \
-            "a person who merely entered the ordinary area zone was pinned"
-        assert foreign_zone not in fake.posts, \
-            "an event loitering in another camera's zone was pinned"
-        assert "2 outside its own loitering zone" in text, f"the two skips were not counted:\n{text}"
-        print("ok  a person who entered only camera_N_area is not pinned; the same kind of "
-              "event in camera_N_loitering is, and another camera's loitering zone is not")
-        second = run_retain(base, "--once")
-        assert second.returncode == 0, f"exit {second.returncode}:\n{clean(second)}"
-        assert fake.pinned == [loitered], "the pinned event was pinned a second time"
-        print("ok  a second pass pins nothing again, so a loitering event is pinned once")
+        assert "1 unique event(s)" in text, f"the candidate row was never read:\n{text}"
+        assert "0 not addressable" in text, f"the candidate row was unreadable:\n{text}"
+        assert "no entry camera armed" in text, f"the default was not disarmed:\n{text}"
+        assert fake.posts == [], f"a disarmed pass pinned {fake.posts}"
+        assert fake.deletes == [], f"a disarmed pass deleted {fake.deletes}"
+        fresh = retain.EntryState().snapshot()
+        assert all(not row["armed"] and row["armed_since"] is None for row in fresh.values()), \
+            f"a fresh state was not disarmed: {fresh}"
+        print("ok  --once reads the candidate and reports no entry camera armed, pins nothing, "
+              "and deletes nothing; a fresh state is disarmed on both cameras")
+
+
+def check_entry_rule():
+    """Arming is the whole rule: only a person, only on cameras 1 and 4, only their own
+    restricted zone, and only from the moment the arm happened."""
+    armed_at = int(time.time()) - 5
+    fake = FakeFrigate(entry_fixture(armed_at))
+    new1, new4 = ids(fake, [0])[0], ids(fake, [1])[0]
+    old1, old4 = ids(fake, [2])[0], ids(fake, [3])[0]
+    wrong_zone, area_only, loitered = ids(fake, [4])[0], ids(fake, [5])[0], ids(fake, [6])[0]
+    house2, house3, old_house = ids(fake, [7])[0], ids(fake, [8])[0], ids(fake, [9])[0]
+    dog, cat = ids(fake, [10])[0], ids(fake, [11])[0]
+    with serving(fake) as base:
+        state = armed_state(base, "camera_1", "camera_4", at=armed_at)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            assert run_armed(base, state) == 0
+        text = out.getvalue()
+        # Every negative below only means something if the walk actually read it.
+        assert f"{len(fake.events)} unique event(s)" in text, \
+            f"the walk did not read all twelve rows:\n{text}"
+        assert "0 not addressable" in text, f"a row was unreadable:\n{text}"
+        assert sorted(fake.pinned) == sorted([new1, new4, dog]), \
+            f"pinned {sorted(fake.pinned)}, expected only the two new entries and the on-sight dog"
+        for never in (old1, old4, wrong_zone, area_only, loitered, house2, house3, old_house, cat):
+            assert never not in fake.posts, f"{never} was POSTed and should not have been"
+        assert fake.deletes == [], f"an armed pass deleted {fake.deletes}"
+        print("ok  armed: a person entering its own restricted area on camera_1 or camera_4 is "
+              "pinned on entry, with no dwell, while the same event on camera_2 or camera_3 "
+              "pins nothing however it is labelled")
+        print("ok  an entry that began before the arm is not pinned on an armed camera, so "
+              "arming cannot reach back into the six hours the pass reads")
+        print("ok  another camera's restricted zone, the ordinary area zone and the removed "
+              "60 second camera_N_loitering zone all pin nothing")
+        print("ok  the restricted zone is behind the other gates: a dog carrying "
+              "camera_3_restricted is still pinned as an animal on sight, and a cat on "
+              "camera_4 is refused on the camera")
+
+        # Arming twice must not move the moment the first arming recorded.
+        first_since = state.snapshot()["camera_1"]["armed_since"]
+        state.arm("camera_1", time.time())
+        assert state.snapshot()["camera_1"]["armed_since"] == first_since, \
+            "re-arming moved the armed_since, so the boundary a pass uses moved with it"
+        print("ok  arming an armed camera again is idempotent and keeps the original "
+              "armed_since, so a repeated click cannot widen what a pass may keep")
+
+        # And a disarm stops new pins without touching what is already kept.
+        state.disarm("camera_1", time.time())
+        fresh = [event(f"lat{n:03d}", "camera_1", int(time.time()) - n,
+                       zones=["camera_1_restricted"]) for n in range(1, 4)]
+        fake.events.extend(fresh)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            assert run_armed(base, state) == 0
+        text = out.getvalue()
+        for row in fresh:
+            assert row["id"] not in fake.posts, f"{row['id']} pinned after a disarm"
+        # The rows have to have been read to be proof of anything: a row the walk
+        # could not address would pass the line above for the wrong reason.
+        assert f"{len(fake.events)} unique event(s)" in text, \
+            f"the three new entries were never read, so nothing above proves anything:\n{text}"
+        assert "0 not addressable" in text, f"a new entry was unreadable:\n{text}"
+        assert "0 pinned" in text, f"something pinned after the disarm:\n{text}"
+        kept = [row["id"] for row in fake.events if row.get("retain_indefinitely") is True]
+        assert new1 in kept, "a disarm cleared a flag that had already been set"
+        print("ok  disarming stops new pins and never releases one already kept, so the old "
+              "pile from the removed 60 second rule is untouched")
+
+
+def check_arming_needs_a_configured_zone():
+    """A camera Frigate does not report a restricted area for, and a config that
+    cannot be read at all, both refuse to arm and keep pinning nothing."""
+    for label, config in (("a valid config with no restricted zone", "no-zones"),
+                          ("a config route that fails", "error")):
+        fake = FakeFrigate([event("just01", "camera_1", int(time.time()) - 60,
+                                  zones=["camera_1_restricted"])], config=config)
+        with serving(fake) as base:
+            state = retain.EntryState()
+            ready = state.ready(retain.Api(base, 5), time.time(), force=True)
+            assert ready == {"camera_1": False, "camera_4": False}, \
+                f"{label} still reported ready: {ready}"
+            state.arm("camera_1", time.time())
+            assert state.guard("camera_1") is None, \
+                "a camera that is not ready still handed out an arming ceiling"
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                assert run_armed(base, state) == 0
+            text = out.getvalue()
+            assert "1 unique event(s)" in text and "0 not addressable" in text, \
+                f"the candidate row was not read:\n{text}"
+            assert fake.posts == [], f"an unready camera still pinned {fake.posts}"
+            assert fake.config_reads >= 1, "readiness never read the config at all"
+        print(f"ok  {label}: both cameras read not ready, an arming changes nothing a pass can "
+              "reach, and the answer came from Frigate's own config")
+
+
+def check_revalidating_clears_a_stale_arm():
+    """A camera whose zone can no longer be confirmed stops pinning, flag and all."""
+    armed_at = int(time.time()) - 5
+    fake = FakeFrigate(entry_fixture(armed_at))
+    dog = ids(fake, [10])[0]
+    with serving(fake) as base:
+        state = armed_state(base, "camera_1", "camera_4", at=armed_at)
+        assert state.guard("camera_1") == armed_at, "the arm did not take"
+        fake.config = "no-zones"  # the zone is gone from a config that still reads fine
+        state.ready(retain.Api(base, 5), time.time(), force=True)
+        assert state.guard("camera_1") is None, \
+            "a camera that stopped being ready still handed out an arming ceiling"
+        snapshot = state.snapshot()["camera_1"]
+        assert not snapshot["armed"] and snapshot["armed_since"] is None, \
+            f"the stale armed flag survived: {snapshot}"
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            assert run_armed(base, state) == 0
+        assert fake.pinned == [dog], \
+            f"pinned {sorted(fake.pinned)} after the zone stopped being ready; only the " \
+            f"on-sight dog may pin"
+        assert fake.deletes == [], f"a revalidation deleted {fake.deletes}"
+        print("ok  a revalidation that no longer finds the zone disarms the camera, so a zone "
+              "removed stops new pins; already kept records are untouched")
 
 
 def check_animal_rule():
     """An animal on cameras 1-3 is pinned on sight; on camera_4 it is not pinned at all.
 
-    The animal rows carry no zone, so this proves the pin is not the loitering rule
-    wearing an animal's label: without the on-sight branch they would be skipped.
+    The animal rows carry no arming behind them, so this proves the animal pin is
+    its own rule and owes nothing to entry review.
     """
-    events = [event(f"a{label[:3]}0{n}", camera, BASE_TIME + 500 - n, label=label)
+    events = [event(f"a{label[:3]}0{n}", camera, BASE_TIME + 500 - n, label=label, zones=[])
               for n, (label, camera) in enumerate((
                   ("dog", "camera_1"), ("cat", "camera_2"), ("cow", "camera_3"),
                   ("bird", "camera_4"), ("bear", "camera_4"), ("zebra", "camera_3"),
@@ -443,8 +668,6 @@ def check_animal_rule():
     fake = FakeFrigate(events)
     pinned_on_sight = ids(fake, [0, 1, 2, 5])
     refused_camera = ids(fake, [3, 4])
-    assert not any(retain.pin_disqualification(row) is None for row in events[3:5]), \
-        "an animal on camera_4 qualified"
     with serving(fake) as base:
         result = run_retain(base, "--once")
         text = clean(result)
@@ -455,8 +678,8 @@ def check_animal_rule():
             assert never not in fake.posts, f"{never} on camera_4 was POSTed"
         assert "2 an animal on a camera that does not watch for them" in text, \
             f"the camera-4 refusals were not counted:\n{text}"
-        print("ok  every animal label on cameras 1-3 pins with no zone at all, and the same "
-              "labels on camera_4 are refused before any POST")
+        print("ok  every animal label on cameras 1-3 pins with no zone and no arming at all, "
+              "and the same labels on camera_4 are refused before any POST")
         # And the archive/delete gate agrees, or a pinned row could exist that the
         # operator can never find or remove.
         for row in events[:3]:
@@ -534,7 +757,10 @@ def main():
     parser.parse_args()
     check_defaults()
     check_cursor_shape(check_tied_walk())
-    check_zone_rule()
+    check_disarmed_is_the_default()
+    check_entry_rule()
+    check_arming_needs_a_configured_zone()
+    check_revalidating_clears_a_stale_arm()
     check_animal_rule()
     check_qualification()
     check_page_cap()

@@ -1,29 +1,44 @@
 #!/usr/bin/env python3
-"""Pin the person events that loitered in a camera's own zone, and the animal events
-seen on cameras 1-3, so they survive pruning.
+"""Keep entry snapshots for review, and the animals seen on cameras 1-3.
 
-Frigate ages ordinary snapshots out on a timer (snapshots.retain.default), and a
-zone somebody stands around in fills that window faster than it is read. This
-worker sets Frigate's own retain_indefinitely on those events instead. Its poll
-deletes nothing, ever.
+Three rules, and what each one is for.
 
-Two rules, because two different things are worth keeping. A person is pinned
-only after 60 tracked in-zone seconds: ordinary presence is not evidence of
-anything. An animal on camera_1, camera_2 or camera_3 is pinned on sight, because
-presence is the whole of the evidence. camera_4 tracks person only and is held to
-that here regardless of what Frigate is configured to track.
+A person is retained only while a person has switched entry review on for that
+camera by hand, and only for an event that carries that camera's own restricted
+zone and started at or after the moment it was armed. Ordinary family movement
+through the house is not evidence of anything, so nothing is retained by
+default: arming is a person's decision, it is per camera, and it lives in this
+process's memory only, so every restart comes back disarmed and nothing stays
+armed by accident. Disarming stops new pins and never unpins what is already
+kept.
+
+The 60-second full-frame person rule that preceded this is gone, on every
+camera. Events retained under it stay exactly as they are: this worker only ever
+sets retain_indefinitely, it has no un-pin path and no sweep, and there is no
+migration.
+
+An animal on camera_1, camera_2 or camera_3 is pinned on sight, because presence
+is the whole of the evidence, and that rule is unchanged. camera_4 tracks person
+only and is held to that here regardless of what Frigate is configured to track.
 
 With --serve the same process also answers the dashboard's endpoints: the read-only
-count and the paginated archive behind the browser, and the one controlled manual
-deletion. Nothing there deletes unless a request arrives on an exact path with the
-dashboard's own Host, an Origin equal to it, a JSON content type and the delete
-action header, and says what it means to delete. No path or query of the request is
-ever forwarded upstream: each endpoint builds its own upstream call from literals,
-validated ids and validated filters.
+count and the paginated archive behind the browser, the entry arming status and
+its one write, and the one controlled manual deletion. Nothing there deletes
+unless a request arrives on an exact path with the dashboard's own Host, an
+Origin equal to it, a JSON content type and the matching action header, and says
+what it means to delete. No path or query of the request is ever forwarded
+upstream: each endpoint builds its own upstream call from literals, validated ids
+and validated filters.
 
-Stdlib only, internal API only, and stateless: Frigate's own flag answers "is
-this already pinned", so a restart neither re-pins nor forgets. Log lines carry
-ids, camera names, counts and status codes only.
+A camera is ready to arm only when Frigate's own /api/config reports that camera's
+expected restricted zone as person-only at loitering_time 0. That read is
+refreshed on a timer and after any change, is parsed only into booleans, and is
+never forwarded to the browser: the config carries RTSP URLs with credentials,
+so nothing from it but two true-or-false answers is ever returned, and a failed
+read leaves every camera not ready.
+
+Stdlib only, internal API only. Log lines carry ids, camera names, booleans,
+counts and status codes only.
 
     python3 scripts/retain.py --once
     python3 scripts/retain.py --delete-reviewed 1790910000.123456-abc123
@@ -44,13 +59,19 @@ import urllib.parse
 import urllib.request
 
 CAMERAS = ("camera_1", "camera_2", "camera_3", "camera_4")
-# The loitering zone, not the whole-frame one: an event carries a zone once its
-# dwell threshold is met, so requiring camera_N_loitering is what makes an
-# ordinary walk-through age out on the six-hour timer instead of being kept
-# forever. coordinates and inertia are the zone editor's business; this is only
-# the name the config gives that zone.
-REQUIRED_ZONE = {camera: f"{camera}_loitering" for camera in CAMERAS}
 TARGET_LABEL = "person"
+# The two cameras a person may arm entry review on, and the only two that have a
+# restricted zone at all. Camera_1 and camera_4 watch the area_4 approach;
+# camera_2 and camera_3 are internal views, where ordinary family movement
+# must never accumulate into a kept record, so a person event on either is never
+# pinned here however many zones it carries. Not a judgement about either room.
+ENTRY_CAMERAS = ("camera_1", "camera_4")
+# One name per entry camera, and deliberately distinct from camera_N_area and from
+# the removed camera_N_loitering: an event carries this zone only once inertia is
+# met at loitering_time 0, which is what makes crossing into the area the whole
+# signal rather than a dwell. Whether the polygon is drawn at all is the owner's
+# open decision, and until it is, no event carries the name and nothing pins.
+RESTRICTED_ZONE = {camera: f"{camera}_restricted" for camera in ENTRY_CAMERAS}
 # The ten COCO 91 animal classes, in the labelmap's own order. The model reports a
 # species and nothing about harm, so this list is "an animal this suite watches",
 # never "a dangerous animal". There is no rat, mouse, rodent, snake or scorpion
@@ -73,7 +94,10 @@ REASONS = (  # the order a skipped event is counted in, one line per run_pass
     "without a snapshot",
     "not a person or a tracked animal",
     "an animal on a camera that does not watch for them",
-    "outside its own loitering zone",
+    "while entry review was disarmed",
+    "before entry review was armed",
+    "outside its own restricted zone",
+    "on a camera with no restricted zone",
     "from no configured camera",
 )
 
@@ -89,6 +113,11 @@ TIMEOUT = 10.0
 # older would only cost. The margin is clock skew against Frigate.
 LOOKBACK_SECONDS = 6 * 60 * 60
 LOOKBACK_MARGIN_SECONDS = 5 * 60
+# Frigate's config read is cached and revalidated at most this often. The poll
+# asks every 30 s and the status read can come every few seconds, so without a
+# floor each one would hit /api/config, which is the heaviest route in the stack.
+# Arming forces a fresh read instead of waiting out the window.
+CONFIG_REVALIDATE_SECONDS = 60.0
 
 # Frigate's own tracker id is "<frame_time>-<rand_id>", e.g. 1790910000.123456-abc123.
 # Anything not exactly this form never reaches a request path. fullmatch, not
@@ -98,6 +127,126 @@ EVENT_ID = re.compile(r"[0-9]+(?:\.[0-9]+)?-[a-z0-9]{6}")
 EXIT_OK = 0
 EXIT_NO_PASS = 1  # the pass did not complete; the next cycle tries again
 EXIT_BAD_INPUT = 2  # refused before any request was made
+
+
+class EntryState:
+    """Arming for the two entry cameras, in this process's memory and nowhere else.
+
+    No file, no database and no upstream write: a restart therefore forgets
+    everything and comes back disarmed, which is the safe direction to forget in.
+    The config read behind `ready` is cached, so a status read never turns into
+    one request per row, and it is forced after any change so a ready verdict
+    can never lag the geometry it was read from.
+    """
+
+    def __init__(self):
+        self._cameras = {camera: {"armed": False, "armed_since": None} for camera in ENTRY_CAMERAS}
+        self._ready = {camera: False for camera in ENTRY_CAMERAS}
+        self._checked_at = None
+
+    def snapshot(self):
+        """The whole state as plain booleans and one number, safe to hand out."""
+        return {camera: dict(self._cameras[camera], ready=self._ready[camera]) for camera in ENTRY_CAMERAS}
+
+    def _cache_fresh(self, now):
+        return self._checked_at is not None and now - self._checked_at < CONFIG_REVALIDATE_SECONDS
+
+    def ready(self, api, now, force=False):
+        """Whether each entry camera may be armed, from Frigate's own config.
+
+        Fail closed. A transport error, a non-2xx, a body that is not JSON or a
+        shape this file cannot read is not a config with no zones: it leaves every
+        camera not ready and every armed flag cleared, so the next POST refuses
+        rather than trusting the last good answer. Nothing from the config but
+        these booleans is kept, and the body itself is never stored or returned.
+        """
+        if not force and self._cache_fresh(now):
+            return self._ready
+        try:
+            ready = restricted_zones_ready(self._read_config(api))
+        except (urllib.error.URLError, OSError, ValueError):
+            ready = {camera: False for camera in ENTRY_CAMERAS}
+            log("entry: Frigate's config could not be read, so every entry camera is "
+                "not ready and disarmed")
+        if ready != self._ready:
+            log("entry: ready " + ", ".join(f"{camera}={str(ready[camera]).lower()}"
+                                            for camera in ENTRY_CAMERAS))
+        self._ready = ready
+        self._checked_at = now
+        # After every result, not only a fresh one: a camera that has just stopped
+        # being ready must stop pinning at once. This is not an un-pin — an event
+        # already pinned keeps its flag, because this worker has no path that
+        # clears one. It only stops further pins.
+        for camera in ENTRY_CAMERAS:
+            if not ready[camera]:
+                self._cameras[camera] = {"armed": False, "armed_since": None}
+        return ready
+
+    @staticmethod
+    def _read_config(api):
+        status, body = api.call("/api/config")
+        if not 200 <= status < 300:
+            raise ValueError("config was not 2xx")
+        return json.loads(body.decode("utf-8", "replace"))
+
+    def guard(self, camera):
+        """The armed_since a candidate event has to clear, or None.
+
+        None means "nothing is being kept for people on this camera": a camera
+        with no restricted zone, and one that is disarmed or not ready. All three
+        land here, in one place, so no caller reaches a pin without passing this.
+        """
+        if camera not in self._cameras or not self._ready.get(camera):
+            return None
+        state = self._cameras[camera]
+        if not state["armed"]:
+            return None
+        return state["armed_since"]
+
+    def arm(self, camera, now):
+        """Turn one camera on. Readiness is checked by the caller, so this only
+        records the moment; there is no path here that writes upstream.
+
+        Arming a camera that is already armed keeps the moment the first arming
+        recorded rather than moving it. A repeated click, or a page that re-sends
+        the same request, must not slide the boundary forwards and let a pass reach
+        further back into history than the person who armed it intended.
+        """
+        if self._cameras[camera]["armed"]:
+            return
+        self._cameras[camera] = {"armed": True, "armed_since": now}
+
+    def disarm(self, camera, now):
+        """Stop new pins. Never unpins, never clears a kept record, and works on a
+        camera that has stopped being ready: turning it off is always allowed."""
+        self._cameras[camera] = {"armed": False, "armed_since": None}
+
+
+def restricted_zones_ready(config):
+    """{camera: bool}: does Frigate's own config carry this camera's expected
+    restricted zone, person-only at loitering_time 0?
+
+    Read only far enough to answer that, and answer nothing else. The config
+    carries RTSP URLs with credentials, so it is parsed here and never stored,
+    never logged and never returned: what leaves this function is two booleans.
+    A shape this does not recognise is False, never a guess.
+    """
+    cameras = config.get("cameras") if isinstance(config, dict) else None
+    if not isinstance(cameras, dict):
+        return {camera: False for camera in ENTRY_CAMERAS}
+    ready = {}
+    for camera in ENTRY_CAMERAS:
+        block = cameras.get(camera)
+        zones = block.get("zones") if isinstance(block, dict) else None
+        zone = zones.get(RESTRICTED_ZONE[camera]) if isinstance(zones, dict) else None
+        if not isinstance(zone, dict):
+            ready[camera] = False
+            continue
+        labels = zone.get("objects")
+        # Exactly person: an animal in this zone would be indistinguishable from a
+        # person crossing the line, which is the one thing this zone cannot be.
+        ready[camera] = zone.get("loitering_time") == 0 and labels == [TARGET_LABEL]
+    return ready
 
 
 class PassFailed(Exception):
@@ -276,11 +425,14 @@ def disqualification(event):
     """Why this event is not one of this suite's snapshot-bearing person-or-animal
     events, or None if it is one. Camera, snapshot and label only.
 
-    This is the check that gates deletion, and deliberately no zone: a zone says
-    whether an event was worth keeping, not whether deleting it is allowed.
+    This is the check that gates listing and deletion, and deliberately no zone,
+    no arming state and no time: it answers "may an operator reach this row",
+    which must not change when the retention policy does. A person on any of the
+    four cameras stays listable and deletable whether or not anybody armed
+    anything, so an old kept record can still be removed.
     """
     camera = event.get("camera")
-    if not isinstance(camera, str) or camera not in REQUIRED_ZONE:
+    if not isinstance(camera, str) or camera not in CAMERAS:
         return "from no configured camera"
     # The upstream already filters on label and snapshot; re-checking is what stops
     # a change in its filter semantics from silently widening what this retains.
@@ -295,32 +447,55 @@ def disqualification(event):
     return None
 
 
-def pin_disqualification(event):
+def pin_disqualification(event, entry, now):
     """Why this event must not be pinned, or None if it qualifies.
 
-    A person is pinned only after loitering in its own camera's loitering zone;
-    ordinary presence is not evidence of anything, and pinning that would put
-    every routine walk-through on disk forever.
+    A person is pinned only when all four of these hold: that camera's entry
+    review is armed right now, the event carries that camera's own restricted
+    zone, the event started at or after the armed_since of the arming that let it
+    through, and the event is inside the pass's lookback. A 60-second full-frame
+    presence pins nothing any more, on any camera.
 
-    An animal is pinned the moment it is seen. Presence is the whole of the
-    evidence: an animal in the area zone has already been snapshotted with
-    loitering_time 0, and making it then serve 60 more seconds in a zone it is
-    never in would be 60 seconds it was loose and unrecorded.
+    The armed_since comparison is exact on purpose. An event that began before
+    somebody switched a camera on is not one they switched on to keep, so arming
+    can never reach back into the six hours of archive the pass reads. That
+    leaves one known gap, stated rather than hidden: a track that entered the
+    restricted area before the arm and is still running will not be pinned at all,
+    because Frigate reports one start_time for the whole track. Catching those
+    needs the current-zone-entry signal on MQTT, which is not built here.
+
+    An animal is pinned the moment it is seen, whichever zones it carries.
+    Presence is the whole of the evidence: an animal in the area zone has already
+    been snapshotted with loitering_time 0, and making it then serve 60 more
+    seconds in a zone it is never in would be 60 seconds it was loose and
+    unrecorded. An animal is never an entry and never needs arming.
     """
     reason = disqualification(event)
     if reason is not None:
         return reason
     if event.get("label") in ANIMAL_LABELS:
         return None
-    # A zone polygon is per camera, so camera_2 naming camera_1_loitering is not
-    # somebody loitering in camera_2.
-    if REQUIRED_ZONE[event["camera"]] not in zones(event):
-        return "outside its own loitering zone"
+    camera = event["camera"]
+    armed_since = entry.guard(camera)
+    if armed_since is None:
+        return ("on a camera with no restricted zone" if camera not in RESTRICTED_ZONE
+                else "while entry review was disarmed")
+    if RESTRICTED_ZONE[camera] not in zones(event):
+        return "outside its own restricted zone"
+    stamp = start_time(event)
+    if stamp is None or stamp < armed_since:
+        return "before entry review was armed"
     return None
 
 
-def run_pass(api, page_size, max_pages):
+def run_pass(api, page_size, max_pages, entry, now=None):
     """One poll -> read -> pin pass. 0 only if the pass ran to the end and every pin stuck."""
+    if now is None:
+        now = time.time()
+    # Readiness comes from the cached config read, so a 30 s pass does not turn
+    # into a /api/config request. A forced check would be a stall on every pass,
+    # which is not what revalidating on a timer is for.
+    entry.ready(api, now)
     pinned = []
     failed = []
     already = 0
@@ -333,7 +508,7 @@ def run_pass(api, page_size, max_pages):
         # Sorted by id, and the id embeds its start_time, so the same upstream
         # produces the same pass in the same order every cycle.
         for event in sorted(events.values(), key=lambda e: e["id"]):
-            reason = pin_disqualification(event)
+            reason = pin_disqualification(event, entry, now)
             if reason is not None:
                 skipped[reason] = skipped.get(reason, 0) + 1
                 continue
@@ -353,9 +528,11 @@ def run_pass(api, page_size, max_pages):
         log(f"pass skipped: {type(err).__name__} reaching Frigate; retrying on the next cycle")
         return EXIT_NO_PASS
     counts = ", ".join(f"{skipped.get(reason, 0)} {reason}" for reason in REASONS)
+    armed = ", ".join(f"{camera} armed" for camera in ENTRY_CAMERAS
+                      if entry.snapshot()[camera]["armed"]) or "no entry camera armed"
     log(f"scan: {walk['pages']} page(s) of at most {page_size} rows, {len(events)} unique event(s), "
         f"{walk['malformed']} not addressable by a native id")
-    log(f"pin: {len(pinned)} pinned, {already} already retained, {counts}")
+    log(f"pin: {len(pinned)} pinned, {already} already retained, {armed}; {counts}")
     if failed:
         log(
             f"{len(failed)} pin(s) refused by Frigate, left unpinned and retried next cycle: "
@@ -365,17 +542,18 @@ def run_pass(api, page_size, max_pages):
     return EXIT_OK
 
 
-def poll_forever(api, args, lock=None):
-    log(f"polling {redacted(api.base)} every {args.interval:g}s for person events with "
-        f"snapshots in their own loitering zone, and {len(ANIMAL_LABELS)} animal labels "
-        f"on {', '.join(ANIMAL_CAMERAS)}")
+def poll_forever(api, args, entry, lock=None):
+    log(f"polling {redacted(api.base)} every {args.interval:g}s for {len(ANIMAL_LABELS)} animal "
+        f"labels on {', '.join(ANIMAL_CAMERAS)}, and for people only on the entry cameras "
+        f"{', '.join(ENTRY_CAMERAS)} while they are armed by hand")
     try:
         while True:
             started = time.monotonic()
-            # The same lock the deletion gateway takes, so a pass and a manual
-            # deletion can never interleave: one walk, then one write, in turn.
+            # The same lock the gateway takes for an arm, a disarm or a deletion, so
+            # a pass and any of those writes never interleave: one walk, then one
+            # write, in turn. A disarm therefore waits for the pass in flight.
             with (lock if lock is not None else contextlib.nullcontext()):
-                run_pass(api, args.page_size, args.max_pages)
+                run_pass(api, args.page_size, args.max_pages, entry)
             # Measured from the start of the pass, so a slow pass does not push the
             # cadence out and bursts cannot stack up back-to-back passes.
             time.sleep(max(0.0, args.interval - (time.monotonic() - started)))
@@ -410,24 +588,36 @@ def delete_reviewed(api, event_id):
 
 
 # ---------------------------------------------------------------------------
-# The deletion gateway
+# The gateway
 # ---------------------------------------------------------------------------
 #
-# This is the only write path in the project, so every rule is a refusal by
-# default: three exact paths, one Host the dashboard is published on, an Origin
-# equal to that Host on the write, a JSON content type, an action header, and a
+# Two write paths in the project, and every rule is a refusal by default: exact
+# paths, one Host the dashboard is published on, an Origin equal to that Host on
+# each write, a JSON content type, the action header that write requires, and a
 # body that has already been fully validated before a single upstream request is
 # made. Nothing about the request line reaches Frigate: each upstream call below
 # is built from literals, ids that passed the native id pattern, and query
 # parameters that passed their own filter.
+#
+# One of the two writes deletes an event, irreversibly. The other flips an
+# in-memory arming flag for one of two cameras, writes nothing upstream and
+# touches no configuration: Frigate's /api/config is read here only to answer
+# whether the expected restricted zone exists, and only booleans leave it.
 
 GATEWAY_LISTEN = "0.0.0.0:8090"  # the internal network only; compose publishes no port for it
 ALLOWED_HOSTS = ("localhost:8088", "127.0.0.1:8088")  # where the dashboard is published
 SUMMARY_PATH = "/api/snapshots/summary"
 EVENTS_PATH = "/api/snapshots/events"
 DELETE_PATH = "/api/snapshots/delete"
+ENTRY_PATH = "/api/security/entry"
 ACTION_HEADER = "X-Surveillance-Action"
 ACTION_VALUE = "delete"
+ENTRY_ACTION_VALUE = "arm-entry"
+# Shown in every status answer, so "armed" is never read as a permanent state: it
+# is held in this process's memory and nothing survives a restart.
+ENTRY_NOTICE = ("Arming is held in this process's memory only. Every restart comes back "
+                "disarmed, and disarming never releases a snapshot already kept. An entry "
+                "already under way when you arm can be missed.")
 MAX_DELETE_IDS = 1000
 MAX_BODY_BYTES = 64 * 1024
 EVENTS_PAGE_SIZE = 25  # rows per archive page, fixed so a page number always means this count
@@ -442,6 +632,43 @@ class Refused(Exception):
     def __init__(self, status, message):
         super().__init__(message)
         self.status = status
+
+
+def entry_status(entry, api, now, force=False):
+    """The whole entry answer: the cameras, two booleans and one number each, and
+    the restart notice. Nothing from Frigate's config is in here.
+
+    force re-reads the config before answering, which the POST needs and the GET
+    does not: a request that has just armed a camera must not be refused by a
+    cached verdict taken before the operator drew the zone.
+    """
+    entry.ready(api, now, force)
+    return {
+        "cameras": list(ENTRY_CAMERAS),
+        "notice": ENTRY_NOTICE,
+        "state": entry.snapshot(),
+    }
+
+
+def entry_plan(body):
+    """(camera, armed) or Refused, before any lock is taken or config is read.
+
+    Exactly two keys, exactly the two entry cameras, and a real boolean: a string
+    "true", a 1, a missing field or a third key is refused rather than guessed
+    at, because this is the one body that turns retention on.
+    """
+    if not isinstance(body, dict):
+        raise Refused(400, 'send {"camera":"camera_1"|"camera_4","armed":true|false}')
+    if set(body) != {"camera", "armed"}:
+        raise Refused(400, "send camera and armed, and nothing else")
+    camera = body["camera"]
+    armed = body["armed"]
+    if not isinstance(camera, str) or camera not in ENTRY_CAMERAS:
+        raise Refused(400, f"camera must be {ENTRY_CAMERAS[0]} or {ENTRY_CAMERAS[1]}; "
+                           "camera_2 and camera_3 have no restricted area")
+    if armed is not True and armed is not False:
+        raise Refused(400, "armed must be the boolean true or false")
+    return camera, armed
 
 
 def select_archive(api, cutoff, page_size, max_pages):
@@ -657,7 +884,8 @@ def delete_plan(body, now):
 
 
 class Gateway(http.server.BaseHTTPRequestHandler):
-    """Three endpoints, summary, events and delete, and a refusal for everything else.
+    """Four endpoints — summary, events, delete and entry — and a refusal for
+    everything else.
 
     The Host is checked on each, because the browser only ever reaches this
     through the dashboard, and a request naming any other origin is not the
@@ -717,6 +945,17 @@ class Gateway(http.server.BaseHTTPRequestHandler):
                 if method != "POST":
                     raise Refused(405, "this endpoint answers POST only")
                 return self._json(200, self._delete())
+            if path == ENTRY_PATH:
+                # One path, two verbs: the status is a read and the arming is the
+                # only write on it. Neither accepts a query string, so nothing a
+                # client appends can select a camera or widen the body.
+                if parsed.query:
+                    raise Refused(400, "this endpoint takes no query string")
+                if method in ("GET", "HEAD"):
+                    return self._json(200, self._entry())
+                if method == "POST":
+                    return self._json(200, self._entry_write())
+                raise Refused(405, "this endpoint answers GET and POST only")
             raise Refused(404, "no such endpoint")
         except Refused as err:
             self._json(err.status, {"error": str(err)})
@@ -728,9 +967,9 @@ class Gateway(http.server.BaseHTTPRequestHandler):
             log(f"gateway: {type(err).__name__} reaching Frigate; no reply was invented")
             self._json(502, {"error": "Frigate could not be reached"})
         finally:
-            # The route is one of three literals or "unknown"; a client's own path is
+            # The route is one of four literals or "unknown"; a client's own path is
             # never echoed into a log line.
-            known = path if path in (SUMMARY_PATH, EVENTS_PATH, DELETE_PATH) else "unknown"
+            known = path if path in (SUMMARY_PATH, EVENTS_PATH, DELETE_PATH, ENTRY_PATH) else "unknown"
             log(f"gateway: {method} {known} -> {self.status}")
 
     def _summary(self):
@@ -787,18 +1026,69 @@ class Gateway(http.server.BaseHTTPRequestHandler):
             f"{len(reply['failed'])} refused, {reply['active']} still open")
         return reply
 
-    def _require_same_origin(self):
+    def _entry(self):
+        """The arming status, read under the lock so it cannot be answered from
+        half a state change. The config read is cached inside it, so a status poll
+        is not one /api/config request."""
+        with self.server.lock:
+            payload = entry_status(self.server.entry, self.server.api, time.time())
+        state = payload["state"]
+        log("entry: " + ", ".join(
+            f"{camera} ready={str(state[camera]['ready']).lower()} "
+            f"armed={str(state[camera]['armed']).lower()}" for camera in payload["cameras"]))
+        return payload
+
+    def _entry_write(self):
+        """Arm or disarm one camera, in memory. No upstream write, no config edit,
+        and nothing that can delete a record: this flag only decides what a later
+        poll pass is allowed to keep.
+        """
+        self._require_same_origin(ENTRY_ACTION_VALUE)
+        camera, armed = entry_plan(self._read_body())
+        now = time.time()
+        # The same lock the poll pass takes, so an arm or a disarm can never land
+        # halfway through one. It waits for a pass in flight rather than racing it,
+        # and the answer it gives is the state the pass will see next.
+        with self.server.lock:
+            # Re-read either way, so the reply reports the state a poll would see.
+            # Only arming is refused without it: turning a camera off has to work
+            # even when Frigate's config cannot be read, or a camera that stopped
+            # being ready could never be turned off.
+            ready = self.server.entry.ready(self.server.api, now, force=True)
+            if armed:
+                if not ready.get(camera):
+                    raise Refused(409, "that camera's restricted area is not configured in "
+                                       "Frigate yet, so nothing would be kept by arming it")
+                self.server.entry.arm(camera, now)
+            else:
+                self.server.entry.disarm(camera, now)
+            state = self.server.entry.snapshot()[camera]
+            payload = {
+                "cameras": list(ENTRY_CAMERAS),
+                "notice": ENTRY_NOTICE,
+                "state": self.server.entry.snapshot(),
+            }
+        log(f"entry: {camera} {'armed' if armed else 'disarmed'} by operator request "
+            f"(armed_since={state['armed_since']})")
+        return payload
+
+    def _require_same_origin(self, action=ACTION_VALUE):
         """The three things a cross-site page cannot produce on its own: the exact
         Origin, a JSON content type, and a header that forces a preflight this
-        server never answers."""
+        server never answers.
+
+        action is the one header value this write is allowed to carry, and it is
+        named by the caller rather than defaulted into the check: a delete can
+        never be sent as an arming, and an arming can never be sent as a delete.
+        """
         host = (self.headers.get("Host") or "").strip()
         if (self.headers.get("Origin") or "") != f"http://{host}":
             raise Refused(403, "the Origin must be this dashboard's own")
         content_type = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
         if content_type != "application/json":
             raise Refused(415, "the request body must be application/json")
-        if (self.headers.get(ACTION_HEADER) or "").strip().lower() != ACTION_VALUE:
-            raise Refused(403, f"{ACTION_HEADER} must be {ACTION_VALUE}")
+        if (self.headers.get(ACTION_HEADER) or "").strip().lower() != action:
+            raise Refused(403, f"{ACTION_HEADER} must be {action}")
 
     def _read_body(self):
         """The body, read once and parsed, or Refused. Bounded before it is read,
@@ -831,21 +1121,25 @@ class GatewayServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def serve(api, args):
-    """The poll loop and the gateway in one process, sharing one lock. The loop runs
-    here and the server on a daemon thread, so Ctrl-C stops both."""
+def serve(api, args, entry):
+    """The poll loop and the gateway in one process, sharing one lock and one arming
+    state. The loop runs here and the server on a daemon thread, so Ctrl-C stops
+    both. The state is created disarmed and nothing in this process writes it
+    anywhere, so a restart is always a restart back to off."""
     host, port = args.listen
     server = GatewayServer((host, port), Gateway)
     server.api = api
     server.lock = threading.Lock()
+    server.entry = entry
     server.page_size = args.page_size
     server.max_pages = args.max_pages
     thread = threading.Thread(target=server.serve_forever, name="gateway", daemon=True)
     thread.start()
-    log(f"serving the deletion gateway on {host}:{port}, for the dashboard on "
-        f"{' or '.join(ALLOWED_HOSTS)} only")
+    log(f"serving the gateway on {host}:{port}, for the dashboard on "
+        f"{' or '.join(ALLOWED_HOSTS)} only; entry review disarmed on "
+        f"{', '.join(ENTRY_CAMERAS)}")
     try:
-        return poll_forever(api, args, server.lock)
+        return poll_forever(api, args, entry, server.lock)
     finally:
         server.shutdown()
         server.server_close()
@@ -886,7 +1180,8 @@ def positive_float(value):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        description="Pin person events that loitered in a camera's own zone in Frigate"
+        description="Keep entry snapshots for armed cameras 1 and 4, and the animals "
+                    "seen on cameras 1-3, in Frigate"
     )
     parser.add_argument("--api-base", default=API_BASE, help="internal Frigate API base URL")
     parser.add_argument("--interval", type=positive_float, default=POLL_SECONDS,
@@ -906,16 +1201,21 @@ def main(argv=None):
         "--delete-reviewed", metavar="ID", help="delete one event by native id, then exit"
     )
     mode.add_argument("--serve", action="store_true",
-                      help="run the poll loop and the deletion gateway together")
+                      help="run the poll loop and the gateway together")
     args = parser.parse_args(argv)
     api = Api(args.api_base, args.timeout)
+    # Fresh, and therefore disarmed, on every run. There is deliberately no
+    # option that seeds it armed: arming is a person's decision made on the
+    # dashboard, and a --once or a bare poll loop therefore pins people only when
+    # some armed process is holding the state for them.
+    entry = EntryState()
     if args.delete_reviewed is not None:
         return delete_reviewed(api, args.delete_reviewed)
     if args.once:
-        return run_pass(api, args.page_size, args.max_pages)
+        return run_pass(api, args.page_size, args.max_pages, entry)
     if args.serve:
-        return serve(api, args)
-    return poll_forever(api, args)
+        return serve(api, args, entry)
+    return poll_forever(api, args, entry)
 
 
 if __name__ == "__main__":

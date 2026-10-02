@@ -283,13 +283,89 @@
         </dl>
       </section>
 
+      <section class="section" aria-labelledby="entry-heading">
+        <div class="section__head">
+          <div>
+            <h2 class="section__title" id="entry-heading">Entry monitoring</h2>
+            <p class="section__lede">
+              A new person entering the monitored area 1 on Camera 1, or the area_4 on
+              Camera 4, is kept for review while you have that camera armed.
+            </p>
+          </div>
+        </div>
+
+        <div id="entry-controls">
+          <div class="toolbar" id="entry-camera_1">
+            <span class="feed__status">
+              <span class="tick" data-tone="pending" aria-hidden="true"></span>
+              <span data-entry-state id="entry-state-camera_1">Camera 1 entry &middot; reading status</span>
+            </span>
+            <button
+              class="btn btn--quiet"
+              type="button"
+              data-entry-action="camera_1"
+              aria-describedby="entry-state-camera_1"
+              disabled
+            >
+              Arm entry review
+            </button>
+          </div>
+
+          <div class="toolbar" id="entry-camera_4">
+            <span class="feed__status">
+              <span class="tick" data-tone="pending" aria-hidden="true"></span>
+              <span data-entry-state id="entry-state-camera_4">Camera 4 entry &middot; reading status</span>
+            </span>
+            <button
+              class="btn btn--quiet"
+              type="button"
+              data-entry-action="camera_4"
+              aria-describedby="entry-state-camera_4"
+              disabled
+            >
+              Arm entry review
+            </button>
+          </div>
+
+          <p
+            class="result"
+            id="entry-result"
+            data-tone="pending"
+            role="status"
+            aria-live="polite"
+          ></p>
+        </div>
+
+        <details class="legend">
+          <summary>What arming does</summary>
+          <p>
+            It keeps a snapshot for you to look at. It does not say who it was, which way
+            they came, or what they meant &mdash; the camera reports one class, person, so
+            it cannot tell family from anyone else.
+          </p>
+          <p>
+            <strong>Restarting the service disarms both cameras.</strong> Arm again after
+            a restart if you want it. Turning it off stops further snapshots being kept and
+            does not release any that are already kept. Snapshots saved before any of this
+            are left exactly as they were.
+          </p>
+          <p>
+            An entry that had already started when you armed can be missed, because it has
+            one start time for the whole time somebody was on camera. There is no
+            fighting or behaviour detection here at all, and Camera 2 and Camera 3 are not
+            watched for anything like it.
+          </p>
+        </details>
+      </section>
+
       <section class="section" aria-labelledby="events-heading">
         <div class="section__head">
           <div>
             <h2 class="section__title" id="events-heading">Saved detections</h2>
             <p class="section__lede">
-              An ordinary detection in a monitored area expires after 6&nbsp;h. One tracked
-              for 60&nbsp;seconds in an area is held until you delete it.
+              An ordinary detection in a monitored area expires after 6&nbsp;h. A person
+              entering a restricted area on Camera 1 or Camera 4 while you have armed it
+              is held until you delete it.
             </p>
           </div>
           <p class="tally" id="events-tally">Waiting for detection data.</p>
@@ -299,12 +375,13 @@
           <summary>How the row labels are worked out</summary>
           <p>
             <strong>6-hour retention</strong> expires on its own.
-            <strong>Loitering &ge;60&nbsp;s</strong> is the camera service counting how long
-            it tracked one person inside a monitored area.
-            <strong>Kept for review</strong> is held until you delete it. A person gets
-            here by loitering; an animal gets here on sight, on the first three cameras.
-            <strong>Previously kept</strong> was held from before the 60&nbsp;second rule
-            existed. In this prototype a monitored area is the whole camera frame.
+            <strong>Restricted area entry</strong> means a person was inside that
+            camera&rsquo;s own restricted area &mdash; a candidate for review, nothing
+            more. <strong>Kept for review</strong> is held until you delete it: a person
+            gets here through an armed restricted area, an animal on sight on the first
+            three cameras. <strong>Previously kept</strong> was held before this rule
+            existed and is left exactly as it was. In this prototype a monitored area is
+            the whole camera frame.
           </p>
         </details>
 
@@ -454,7 +531,7 @@
             <span class="event__time"></span>
           </p>
           <p class="event__tags">
-            <span class="event__flag event__tag" hidden>Loitering &ge;60&nbsp;s</span>
+            <span class="event__flag event__tag" hidden>Restricted area entry</span>
             <span class="event__kept event__tag">6-hour retention</span>
           </p>
         </div>

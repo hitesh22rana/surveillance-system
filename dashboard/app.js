@@ -19,6 +19,10 @@
  *   - Snapshot paths are only ever built from ids that match the camera
  *     service's own tracker id shape, which is also what nginx accepts and what
  *     the delete request is re-checked against before it is sent.
+ *   - A row's entry tag is read off the event's own zones and never from the
+ *     camera: a restricted-area entry or a 60 s loitering is claimed only
+ *     against that camera's own zone, and only for a person. No configured zone
+ *     name is ever printed.
  *   - Timers never overlap: one loop for stats and events, both stopped while
  *     the tab is hidden. The archive is re-read only on its latest page, so a
  *     page the operator is reading through history stays where they put it.
@@ -58,19 +62,19 @@
     camera_4: "camera_4_area",
   });
 
-  /* The secondary zone, 60 seconds of tracked presence in the same area. A row
-   * qualifies for review by entering it, and its internal name is never shown:
-   * the row reads "Loitering ≥60 s", which says how long someone was tracked
-   * there and nothing about why. That 60 s is the camera service's own count of
-   * frames it tracked inside the zone, not a stopwatch run here. */
-  const LOITERING_ZONE = Object.freeze({
-    camera_1: "camera_1_loitering",
-    camera_2: "camera_2_loitering",
-    camera_3: "camera_3_loitering",
-    camera_4: "camera_4_loitering",
+  /* The restricted area, on the two cameras a person may arm by hand. Like the
+   * area zone its internal name never reaches the page: a row reads "Restricted
+   * area entry", which says a person crossed into that area and nothing at all
+   * about why, from where, or who. camera_2 and camera_3 are not in this map
+   * because they have no restricted area and never will. */
+  const RESTRICTED_ZONE = Object.freeze({
+    camera_1: "camera_1_restricted",
+    camera_4: "camera_4_restricted",
   });
 
-  const LOITERING_LABEL = "Loitering ≥60 s";
+  const RESTRICTED_LABEL = "Restricted area entry";
+
+  const PERSON_LABEL = "person";
 
   /* The ten COCO 91 animal classes, and the three cameras that watch for them.
    * These mirror config/config.example.yml and scripts/retain.py: the worker pins
@@ -90,6 +94,20 @@
    * worker, both fixed: no template, no query string, no second shape. */
   const SUMMARY_PATH = "/api/snapshots/summary";
   const DELETE_PATH = "/api/snapshots/delete";
+
+  /* Entry arming: the two cameras a person may switch on by hand, and the one
+   * exact path that reads and writes it. Both a read and a write, and neither
+   * touches a camera, a zone or a configuration — the worker holds the flag in
+   * memory and forgets it on restart, which the status line says out loud. */
+  const ENTRY_CAMERAS = Object.freeze(["camera_1", "camera_4"]);
+  const ENTRY_PATH = "/api/security/entry";
+  const ENTRY_ACTION = "arm-entry";
+
+  /* Arming is the one write here whose outcome can be genuinely unknown: a POST
+   * that times out may or may not have been applied. So it gets a longer window
+   * than a live read, and its failure path is always a fresh read of the server's
+   * own state rather than a guess at what happened. */
+  const ENTRY_TIMEOUT_MS = 15000;
 
   /* The one read this page forwards a query string to. The worker owns both
    * parameters and answers a fixed page of 25 rows plus the total and the page
@@ -173,6 +191,8 @@
     statDetectRate: $("stat-detect-rate"),
     statInference: $("stat-inference"),
     statAge: $("stat-age"),
+    entry: $("entry-controls"),
+    entryResult: $("entry-result"),
     eventTemplate: $("event-item"),
   };
 
@@ -194,6 +214,17 @@
     statsError: null,
     eventsError: null,
     deleting: false, // a confirmed delete is in flight; no second one can start
+    // Entry arming, read from the worker and never assumed: no optimistic state,
+    // so a refused POST and a failed read both leave the page showing the last
+    // answer the server actually gave.
+    entry: {
+      read: false,
+      error: null,
+      busy: null, // the camera whose POST is in flight, or null
+      epoch: 0, // moved by every write, so a read already in flight cannot land after it
+      notice: "",
+      state: {}, // camera -> {ready, armed, armedSince}
+    },
   };
 
   const cards = new Map();
@@ -309,20 +340,26 @@
   // accepted for the same reason detection_enabled is; a string is never a yes.
   const isKept = (event) => event.retain_indefinitely === true || event.retain_indefinitely === 1;
 
-  const inLoiterZone = (event) => {
-    const zone = LOITERING_ZONE[event.camera];
-    return zone !== undefined && Array.isArray(event.zones) && event.zones.includes(zone);
+  const inRestrictedZone = (event) => {
+    const zone = RESTRICTED_ZONE[event.camera];
+    return (
+      zone !== undefined &&
+      event.label === PERSON_LABEL &&
+      Array.isArray(event.zones) &&
+      event.zones.includes(zone)
+    );
   };
 
-  /* Retention, stated from what this event carries and never assumed. An
-   * ordinary row expires after the six hours the camera service keeps it. A row
-   * held because it reached the 60 s zone is held for review. A row held because
-   * an animal was seen on a camera that watches for them is held for review too,
-   * and never carries the loitering zone. A person row that is held without that
-   * zone is from the older archive, before the 60 s zone existed. */
+  /* Retention, stated from what this event carries and never assumed. An ordinary
+   * row expires after the six hours the camera service keeps it. A row held
+   * because a person entered its own camera's armed restricted area is held for
+   * review. So is a row held because an animal was seen on a camera that watches
+   * for them. A person row that is held with neither is a record from before this
+   * rule, and says so rather than claiming it is a current risk: the word follows
+   * the flag the service actually reports, never the zone on its own. */
   function retentionText(event) {
     if (!isKept(event)) return "6-hour retention";
-    return inLoiterZone(event) || isAnimal(event) ? "Kept for review" : "Previously kept";
+    return inRestrictedZone(event) || isAnimal(event) ? "Kept for review" : "Previously kept";
   }
 
   /* A count the service reported, accepted only when it is already a whole
@@ -869,17 +906,24 @@
 
   const zoneLabel = (event) => {
     const list = Array.isArray(event.zones) ? event.zones : [];
-    // Both known zones are stripped: the area is stated in words and the tracked
-    // presence is stated in words, so no configured zone name reaches the page.
+    /* Configured zone names never reach the page: the area is stated in words, and
+     * so is a restricted area. The two suffix tests cover the zones this file has
+     * no entry for too — a restricted area on a camera that must not have one, and
+     * the old camera_N_loitering name, which older rows in the archive still carry
+     * and which no longer means anything. */
     const named = list.filter(
-      (zone) => zone !== REQUIRED_ZONE[event.camera] && zone !== LOITERING_ZONE[event.camera]
+      (zone) =>
+        zone !== REQUIRED_ZONE[event.camera] &&
+        zone !== RESTRICTED_ZONE[event.camera] &&
+        !String(zone).endsWith("_restricted") &&
+        !String(zone).endsWith("_loitering")
     );
     const area = named.length > 0 ? named.join(" + ") : "Monitored area";
-    // An animal row has to say which animal it was. It is pinned on sight, so it
-    // carries no loitering flag, and until it does the zone text is the only line
-    // on the row that can name it: a held row that reads only "Monitored area"
-    // says a camera saw something, not what. A person row is unchanged — "person"
-    // is the only class it ever carries, so naming it would be noise.
+    /* An animal row has to say which animal it was. It is pinned on sight, so it
+     * carries no restricted zone, and until it does the zone text is the only line
+     * on the row that can name it: a held row that reads only "Monitored area"
+     * says a camera saw something, not what. A person row is unchanged — "person"
+     * is the only class it ever carries, so naming it would be noise. */
     return isAnimal(event) ? classLabel(event) + " · " + area : area;
   };
 
@@ -968,8 +1012,8 @@
 
     // Rebuild only when a row's content actually changes, so a focused checkbox
     // is not destroyed by an unrelated poll. The signature carries the page it
-    // was built for and the two facts that are printed on the row, so a change of
-    // page, a change of retention or a change of zone is always a real change.
+    // was built for and the facts that are printed on the row, so a change of
+    // page, of retention or of the restricted zone is always a real change.
     const signature =
       state.filter +
       "#" +
@@ -978,7 +1022,7 @@
       rows
         .map(
           (row) =>
-            row.id + ":" + (isKept(row) ? "1" : "0") + (inLoiterZone(row) ? "L" : "-")
+            row.id + ":" + (isKept(row) ? "1" : "0") + (inRestrictedZone(row) ? "R" : "-")
         )
         .join("|");
     if (signature === renderedSignature) {
@@ -1018,13 +1062,14 @@
       node.querySelector(".event__zone").textContent = zoneLabel(event);
       node.querySelector(".event__time").textContent = at;
 
-      // Two facts, each from the event: whether the 60 s zone is among its zones,
-      // and whether it is being held. Neither is a judgement about a person or an
-      // animal, and the loitering flag stays off an animal row, which is held on
-      // sight and never reaches the 60 s zone.
+      // One tag, and only ever about a restricted area: "Restricted area
+      // entry" for a person whose own camera's restricted area carried them, and
+      // nothing at all for every other row. A person is never tagged here for
+      // duration of presence, another camera's zone is not an entry on this one,
+      // and an animal is not an entry — none of which says anything about intent.
       const flag = node.querySelector(".event__flag");
-      setShown(flag, inLoiterZone(event));
-      if (inLoiterZone(event)) flag.textContent = LOITERING_LABEL;
+      setShown(flag, inRestrictedZone(event));
+      if (inRestrictedZone(event)) flag.textContent = RESTRICTED_LABEL;
       node.querySelector(".event__kept").textContent = retentionText(event);
 
       el.events.appendChild(node);
@@ -1328,6 +1373,215 @@
       " on all four cameras, including those kept for review, on every page."
     );
   }
+
+  /* -------------------------------------------------------------- entry -- */
+
+  /* What a status reply has to be before this page acts on one of its two
+   * booleans. Every field is checked, because a reply it cannot read is a status
+   * it does not have: shown as unavailable rather than filled in with a guess.
+   * armed and armed_since have to agree, so an "armed with no moment" or a
+   * "disarmed with one" shape is refused instead of half-believed. */
+  function usableEntry(payload) {
+    if (!isObject(payload)) return null;
+    if (!Array.isArray(payload.cameras)) return null;
+    for (const camera of ENTRY_CAMERAS) {
+      if (!payload.cameras.includes(camera)) return null;
+    }
+    if (!isObject(payload.state)) return null;
+    const state = {};
+    for (const camera of ENTRY_CAMERAS) {
+      const row = payload.state[camera];
+      if (!isObject(row)) return null;
+      const ready = row.ready;
+      const armed = row.armed;
+      if (ready !== true && ready !== false) return null;
+      if (armed !== true && armed !== false) return null;
+      const since = row.armed_since;
+      if (armed) {
+        if (numberOrNull(since) === null || since <= 0) return null;
+      } else if (since !== null) {
+        return null;
+      }
+      state[camera] = { ready: ready, armed: armed, armedSince: since };
+    }
+    return { state: state, notice: textOr(payload.notice, "") };
+  }
+
+  function applyEntry(parsed) {
+    state.entry.state = parsed.state;
+    state.entry.notice = parsed.notice;
+    state.entry.read = true;
+    state.entry.error = null;
+  }
+
+  async function readEntry(allowed) {
+    /* A reply is only believed when it is the newest word on the subject: a read
+     * that started before the newest write is dropped, and so is any read landing
+     * while a write is in flight, so a slow GET can never undo an acknowledged
+     * arm. allowed is only ever set by the one caller that is reconciling its own
+     * write and is holding the controls shut itself.
+     *
+     * A read that would be discarded on return is not sent at all. While a write
+     * is in flight an ordinary GET cannot change anything — its answer is thrown
+     * away — so the request is not made: the service is not asked to answer a
+     * question whose answer cannot be used, and the arming POST is left the only
+     * thing in flight. The epoch guard stays for the read already on the wire
+     * when the write starts, which nothing here can call back. */
+    if (!allowed && state.entry.busy !== null) return { ok: false, stale: true };
+    const epoch = state.entry.epoch;
+    const outdated = () =>
+      (!allowed && state.entry.busy !== null) || epoch !== state.entry.epoch;
+    try {
+      const parsed = usableEntry(await fetchJSON(ENTRY_PATH, ENTRY_TIMEOUT_MS));
+      if (!parsed) throw new Error("unexpected response shape");
+      if (outdated()) return { ok: false, stale: true };
+      applyEntry(parsed);
+      return { ok: true, parsed };
+    } catch (err) {
+      if (outdated()) return { ok: false, stale: true };
+      // A status that could not be read is not a status this page keeps: the last
+      // answer is dropped rather than shown as though it were current.
+      state.entry.read = false;
+      state.entry.error = { message: describe(err) };
+      state.entry.state = {};
+      return { ok: false, error: describe(err) };
+    }
+  }
+
+  async function postEntry(camera, armed) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ENTRY_TIMEOUT_MS);
+    try {
+      const res = await fetch(ENTRY_PATH, {
+        method: "POST",
+        cache: "no-store",
+        credentials: "omit",
+        redirect: "error",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Surveillance-Action": ENTRY_ACTION,
+        },
+        body: JSON.stringify({ camera: camera, armed: armed }),
+        signal: controller.signal,
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const parsed = usableEntry(await res.json());
+      if (!parsed) throw new Error("unexpected response shape");
+      return parsed;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /* One arming write, and never sent twice: a POST whose answer is unknown is
+   * settled by reading the state back, not by asking again. The epoch moves at the
+   * start of the write, so every status read already in flight is discarded rather
+   * than allowed to land on top of the answer this is waiting for. */
+  async function onEntryAction(camera) {
+    /* Four things must already be true before a POST is built: the status has been
+     * read (read is the flag, so a page that has never had an answer cannot write
+     * from a guess), this camera's row is one the server actually described, that
+     * row says its restricted area is ready, and no other write is in flight. The
+     * button is disabled in every one of those states as well; this is the same
+     * refusal in the code path, not only in the rendering. */
+    if (!state.entry.read || state.entry.busy !== null) return;
+    const known = state.entry.state[camera];
+    if (!known || !known.ready) return;
+    const wanted = !known.armed;
+    state.entry.epoch += 1;
+    state.entry.busy = camera;
+    renderEntry();
+    let failure = null;
+    let applied = null;
+    try {
+      applied = await postEntry(camera, wanted);
+    } catch (err) {
+      failure = describe(err);
+      // The write may or may not have landed. Only the service's own next answer
+      // says which, so that is what this waits for. The controls stay shut for the
+      // whole reconciliation: an uncertain answer must not be answered from here.
+      const reread = await readEntry(true);
+      if (reread.ok) applied = reread.parsed;
+    }
+    state.entry.busy = null;
+    if (applied !== null) applyEntry(applied);
+    if (failure === null) {
+      showEntryOutcome(
+        "ok",
+        cameraLabel(camera) + " entry review is now " + (wanted ? "armed" : "disarmed") +
+          ". Snapshots already kept are untouched either way."
+      );
+    } else if (applied !== null) {
+      showEntryOutcome(
+        "warn",
+        "The arming request did not finish (" + failure + "). The state beside the row " +
+          "was read back from the service, so it is what is actually in force."
+      );
+    } else {
+      showEntryOutcome(
+        "bad",
+        "The arming request did not finish (" + failure + ") and the status could not be " +
+          "read back either, so this page cannot say what is in force. Nothing is claimed " +
+          "here: check the service before relying on either state."
+      );
+    }
+    renderEntry();
+  }
+
+  function showEntryOutcome(tone, text) {
+    el.entryResult.dataset.tone = tone;
+    el.entryResult.textContent = text;
+  }
+
+  /* Four states, and each one says what it is: not yet read, not available,
+   * the camera's restricted area is not configured in Frigate, or armed or
+   * disarmed with the moment it was armed. Nothing here is optimistic: the button
+   * offers the action the server's own last answer supports, and is disabled
+   * whenever that answer cannot say whether the camera is ready. */
+  function renderEntry() {
+    for (const camera of ENTRY_CAMERAS) {
+      const row = $("entry-" + camera);
+      if (!row) continue;
+      const known = state.entry.state[camera];
+      const busy = state.entry.busy === camera;
+      const blocked = state.entry.busy !== null;
+      let tone = "pending";
+      let text = cameraLabel(camera) + " entry · reading status";
+      let action = "Arm entry review";
+      let enabled = false;
+      if (!known) {
+        tone = state.entry.read ? "bad" : "pending";
+        text = cameraLabel(camera) + " entry · status unavailable";
+      } else if (!known.ready) {
+        tone = "warn";
+        text = cameraLabel(camera) + " entry · restricted area not configured";
+      } else if (known.armed) {
+        tone = "ok";
+        text =
+          cameraLabel(camera) + " entry · armed since " + clockTime(known.armedSince * 1000);
+        action = "Disarm entry review";
+        enabled = true;
+      } else {
+        text = cameraLabel(camera) + " entry · disarmed";
+        enabled = true;
+      }
+      setTick(row.querySelector(".tick"), tone);
+      row.querySelector("[data-entry-state]").textContent = text;
+      const button = row.querySelector("[data-entry-action]");
+      button.textContent = busy ? "Working…" : action;
+      button.disabled = !enabled || blocked;
+      // The state is the button's description, so its accessible name never
+      // promises more than the row beside it is showing.
+      button.setAttribute("aria-describedby", "entry-state-" + camera);
+    }
+  }
+
+  el.entry.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-entry-action]");
+    if (!button || !el.entry.contains(button)) return;
+    onEntryAction(button.dataset.entryAction);
+  });
 
   /* ------------------------------------------------------------- deletes -- */
 
@@ -1917,6 +2171,7 @@
     renderBarState();
     renderCards();
     renderStrip();
+    renderEntry();
     renderNotice();
     renderEvents();
   }
@@ -1953,9 +2208,13 @@
       /* The archive is only re-read on its latest page, and only when no other
        * read of it is already in flight. A page the operator is reading through
        * history holds still until they ask for another one, and the status and
-       * the live pictures are unaffected either way. */
+       * the live pictures are unaffected either way.
+       *
+       * The entry status rides the same loop and the same Promise.all: no second
+       * timer, and a tab that is hidden stops reading both. */
       await Promise.all([
         readStats(),
+        readEntry(),
         state.page === 1 && !state.eventsLoading ? readEvents(false) : Promise.resolve(),
       ]);
     } finally {

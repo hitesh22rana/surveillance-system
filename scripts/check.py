@@ -81,9 +81,11 @@ PROBE_ID = "0.000000-zzzzzz"
 # Any of these is a refusal. Which one a guard picks is the worker's business.
 REFUSED = (400, 403, 405, 415, 422)
 # The ordinary camera_N_area zone is what makes a row worth listing, but entering it
-# is not a protection: those detections expire after six hours. What the worker holds
-# for review is the secondary camera_N_loitering zone, so that is what is asserted.
-LOITERING_ZONE = {cam: f"{cam}_loitering" for cam in CAMERAS}
+# is not a protection: those detections expire after six hours. The ten COCO 91 animal
+# classes on cameras 1-3 are the rows the worker still pins on sight.
+ANIMAL_LABELS = {"bird", "cat", "dog", "horse", "sheep", "cow",
+                 "elephant", "bear", "zebra", "giraffe"}
+ANIMAL_CAMERAS = {"camera_1", "camera_2", "camera_3"}
 # Only an rtsp:// URL that carries userinfo is a leak. A bare rtsp:// mention in a
 # comment or a library's own docs is not a secret and must not fail this check.
 RTSP_URL = re.compile(r"rtsp://\S+")
@@ -214,23 +216,28 @@ def main():
         assert status == 200 and body[:2] == b"\xff\xd8", f"snapshot {eid}: HTTP {status}, not a JPEG"
         print(f"ok  event {eid} snapshot 200 JPEG")
 
-    # Retention, as the browser sees it: a snapshot a person held for a minute in a
-    # camera's own zone must be flagged kept, or the periodic cleanup would take it
-    # first. What this proves is that the flag reached the page, not that the worker
-    # set it: the worker pins on its own cadence, and until it has run there is
-    # nothing here to assert.
+    # Retention, as the browser sees it: a snapshot the worker is meant to keep must
+    # be flagged kept, or the periodic cleanup would take it first. The only rule
+    # that keeps people today is an armed restricted area, which is off until
+    # somebody arms it, so the observable case on a live stack is an animal on
+    # cameras 1-3, which the worker pins on sight. What this proves is that the
+    # flag reached the page, not that the worker set it: until a pass has run
+    # there is nothing here to assert.
     now = time.time()
     settled = [e for e in events
                if isinstance(e.get("end_time"), (int, float))
                and not isinstance(e.get("end_time"), bool)
                and now - e["end_time"] >= SETTLED_S
-               and LOITERING_ZONE.get(e.get("camera")) in (e.get("zones") or [])]
+               and e.get("label") in ANIMAL_LABELS
+               and e.get("camera") in ANIMAL_CAMERAS]
     if not settled:
-        print(f"NOT TESTED  retained snapshots: no loitering-zone event ended over {SETTLED_S}s ago")
+        print(f"NOT TESTED  retained snapshots: no settled animal event on cameras 1-3 in the "
+              f"last {SETTLED_S}s")
     else:
         unpinned = [e["id"] for e in settled if e.get("retain_indefinitely") not in (True, 1)]
-        assert not unpinned, f"{len(unpinned)} settled loitering-zone event(s) are not retained: {unpinned[:3]}"
-        print(f"ok  all {len(settled)} settled loitering-zone event(s) are flagged kept for review")
+        assert not unpinned, f"{len(unpinned)} settled animal event(s) are not retained: {unpinned[:3]}"
+        print(f"ok  all {len(settled)} settled animal event(s) on cameras 1-3 are flagged kept "
+              f"for review")
 
     for cam in CAMERAS:
         status, _h, body = get(base, f"/api/{cam}/latest.jpg")

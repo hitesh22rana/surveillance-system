@@ -33,7 +33,13 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import retain  # noqa: E402  (path set above, so the production module is the one under test)
-from check_retention import FakeFrigate, event, serving  # noqa: E402
+from check_retention import (  # noqa: E402  (path set above, so the fake is the one under test)
+    CREDENTIAL_MARKER,
+    FakeFrigate,
+    event as retain_event,
+    event,
+    serving,
+)
 
 HOST = "127.0.0.1:8088"  # where compose publishes the dashboard
 BASE_TIME = int(time.time()) - 6 * 3600  # six hours back: already past the six-hour window
@@ -212,15 +218,18 @@ def check_defaults():
         f"allowed hosts {retain.ALLOWED_HOSTS!r}"
     assert retain.MAX_DELETE_IDS == 1000, f"id ceiling {retain.MAX_DELETE_IDS!r}"
     assert retain.MAX_BODY_BYTES == 64 * 1024, f"body ceiling {retain.MAX_BODY_BYTES!r}"
-    assert (retain.SUMMARY_PATH, retain.EVENTS_PATH, retain.DELETE_PATH) == \
-        ("/api/snapshots/summary", "/api/snapshots/events", "/api/snapshots/delete"), \
-        "the three endpoint paths moved"
+    assert (retain.SUMMARY_PATH, retain.EVENTS_PATH, retain.DELETE_PATH, retain.ENTRY_PATH) == \
+        ("/api/snapshots/summary", "/api/snapshots/events", "/api/snapshots/delete",
+         "/api/security/entry"), \
+        "the four endpoint paths moved"
+    assert retain.ENTRY_CAMERAS == ("camera_1", "camera_4"), \
+        f"entry cameras {retain.ENTRY_CAMERAS!r}"
     assert retain.EVENTS_PAGE_SIZE == 25, f"the archive page size is {retain.EVENTS_PAGE_SIZE!r}"
     assert retain.CAMERA_FILTERS == ("all", "camera_1", "camera_2", "camera_3", "camera_4"), \
         f"the camera filters {retain.CAMERA_FILTERS!r}"
-    print("ok  0.0.0.0:8090 by default, three exact paths, both dashboard Hosts, "
-          "at most 1000 ids and 64 KiB per request, 25 rows per archive page and four "
-          "camera filters plus all")
+    print("ok  0.0.0.0:8090 by default, four exact paths, both dashboard Hosts, "
+          "at most 1000 ids and 64 KiB per request, 25 rows per archive page, four "
+          "camera filters plus all, entry arming on cameras 1 and 4 only")
 
 
 def check_guards():
@@ -711,9 +720,15 @@ def check_page_cap_fails_closed():
             assert status == 503, f"a capped archive delete answered HTTP {status}: {body!r}"
             assert "page cap" in body.decode(), f"the cap was not named: {body!r}"
             assert fake.deletes == [], f"a capped walk deleted {fake.deletes}"
-            assert not any(method == "GET" and path != "/api/events" for method, path in fake.calls), \
+            # Only the list reads are allowed here. /api/config is the readiness
+            # read, which is a GET and never touches an event by id; looking one
+            # up is what a delete would do before sending it.
+            assert not any(method == "GET" and path not in ("/api/events", "/api/config")
+                           for method, path in fake.calls), \
                 f"a capped delete looked an event up anyway: {fake.calls}"
-            leaks(output)
+            assert not any(method == "GET" and path.startswith("/api/events/")
+                           for method, path in fake.calls), \
+                f"a capped delete looked one event up by id: {fake.calls}"
             print("ok  with the page cap two pages short of the end of the list, all three "
                   "endpoints answer 503, name the cap, and not one event was looked up or deleted")
 
@@ -740,13 +755,212 @@ def check_poll_never_deletes():
                   "summary still answered without changing the archive")
 
 
+def entry_state(port):
+    """The arming status, over the real path, with no action header — it is a read."""
+    status, _headers, body = call(port, "GET", retain.ENTRY_PATH, origin=None, action=None)
+    assert status == 200, f"the entry status answered HTTP {status}: {body!r}"
+    payload = json.loads(body)
+    assert set(payload) == {"cameras", "notice", "state"}, f"entry status keys {sorted(payload)}"
+    assert payload["cameras"] == ["camera_1", "camera_4"], f"entry cameras {payload['cameras']}"
+    assert set(payload["state"]) == {"camera_1", "camera_4"}, f"entry state {sorted(payload['state'])}"
+    return payload
+
+
+def arm(port, camera, armed, **overrides):
+    """One arming POST. The action header is the one the arming expects unless a
+    case deliberately sends a different one."""
+    kwargs = {"body": {"camera": camera, "armed": armed},
+              "action": retain.ENTRY_ACTION_VALUE}
+    kwargs.update(overrides)
+    return call(port, "POST", retain.ENTRY_PATH, **kwargs)
+
+
+def check_entry_arming():
+    """The arming write, at the real boundary: refused by default, refused until the
+    zone exists, and never a substitute for the delete action or for Frigate's config."""
+    fake = FakeFrigate(console_fixture())
+    with serving(fake) as base:
+        with gateway(base) as (port, output):
+            first = entry_state(port)
+            assert all(not row["armed"] and row["armed_since"] is None
+                       for row in first["state"].values()), \
+                f"a fresh process was not disarmed: {first['state']}"
+            assert "disarmed" in first["notice"], f"the restart notice is missing: {first['notice']}"
+            assert fake.deletes == [], f"reading the status deleted {fake.deletes}"
+            print("ok  a fresh process answers both cameras disarmed with no armed_since, and "
+                  "says in the reply that arming does not survive a restart")
+
+            # Refusals, each proven to leave the state exactly as it was.
+            refusals = (
+                ("another camera's Host", dict(host="192.0.2.9:8088")),
+                ("no Origin", dict(origin=None)),
+                ("a foreign Origin", dict(origin="evil.invalid")),
+                ("an https Origin", dict(origin="https://127.0.0.1:8088")),
+                ("a form content type", dict(content_type="text/plain")),
+                ("no content type", dict(content_type=None)),
+                ("the delete action header", dict(action="delete")),
+                ("no action header", dict(action=None)),
+            )
+            for name, kwargs in refusals:
+                status, _headers, body = arm(port, "camera_1", True, **kwargs)
+                assert status in (400, 403, 415), \
+                    f"arming with {name} answered HTTP {status} instead of refusing: {body!r}"
+                assert all(not row["armed"] for row in entry_state(port)["state"].values()), \
+                    f"arming with {name} changed the state anyway"
+            # The path is exact and takes no query, so the same guards answer it.
+            for name, suffix in (("a query string", "?camera=camera_1"),
+                                 ("a path suffix", "/now")):
+                status, _headers, body = call(port, "POST", retain.ENTRY_PATH + suffix,
+                                              body={"camera": "camera_1", "armed": True},
+                                              action=retain.ENTRY_ACTION_VALUE)
+                assert status in (400, 404), \
+                    f"arming with {name} answered HTTP {status} instead of refusing: {body!r}"
+            assert all(not row["armed"] for row in entry_state(port)["state"].values()), \
+                "arming with a query string or a path suffix changed the state anyway"
+            print(f"ok  {len(refusals) + 2} refusal shapes on the arming POST — foreign Host, "
+                  "missing or foreign Origin, https Origin, wrong or absent content type, the "
+                  "delete action header, no action header, a query string and a path suffix — "
+                  "each refused with the state unchanged")
+
+            # Bodies, before any of them can arm anything.
+            bodies = (
+                ("camera_2", dict(body={"camera": "camera_2", "armed": True})),
+                ("camera_3", dict(body={"camera": "camera_3", "armed": True})),
+                ("an unknown camera", dict(body={"camera": "camera_9", "armed": True})),
+                ("a missing camera", dict(body={"armed": True})),
+                ("a missing armed", dict(body={"camera": "camera_1"})),
+                ("a third key", dict(body={"camera": "camera_1", "armed": True, "until": 99})),
+                ("a string true", dict(body={"camera": "camera_1", "armed": "true"})),
+                ("a numeric 1", dict(body={"camera": "camera_1", "armed": 1})),
+                ("a list", dict(body=["camera_1", True])),
+                ("a string", dict(body="camera_1")),
+                ("null", dict(raw=b"null")),
+                ("an oversized body", dict(body={"camera": "camera_1", "armed": True,
+                                                 "pad": "x" * (retain.MAX_BODY_BYTES + 1)})),
+            )
+            for name, kwargs in bodies:
+                status, _headers, body = call(port, "POST", retain.ENTRY_PATH,
+                                              action=retain.ENTRY_ACTION_VALUE, **kwargs)
+                assert status in (400, 413), \
+                    f"a body naming {name} answered HTTP {status}: {body!r}"
+                assert all(not row["armed"] for row in entry_state(port)["state"].values()), \
+                    f"a body naming {name} armed something"
+            print(f"ok  {len(bodies)} bodies refused with HTTP 400 or 413 — camera_2, camera_3, an "
+                  "unknown camera, a missing key, a third key, a string or numeric armed, "
+                  "four wrong JSON types and an oversized body — each before anything could "
+                  "be armed")
+
+            # The one that should work, and what it says.
+            status, _headers, body = arm(port, "camera_1", True)
+            assert status == 200, f"arming a configured camera answered HTTP {status}: {body!r}"
+            armed = json.loads(body)["state"]["camera_1"]
+            assert armed["armed"] is True and isinstance(armed["armed_since"], (int, float)), \
+                f"arming did not report a moment: {armed}"
+            first_since = armed["armed_since"]
+            # Idempotent: the same request again must not slide the boundary forwards.
+            status, _headers, body = arm(port, "camera_1", True)
+            assert status == 200, f"re-arming answered HTTP {status}: {body!r}"
+            assert json.loads(body)["state"]["camera_1"]["armed_since"] == first_since, \
+                "re-arming moved the armed_since"
+            # Disarm is always allowed, including on a camera that is not ready.
+            status, _headers, body = arm(port, "camera_1", False)
+            assert status == 200, f"disarming answered HTTP {status}: {body!r}"
+            assert json.loads(body)["state"]["camera_1"] == {"ready": True, "armed": False,
+                                                            "armed_since": None}, \
+                "disarming did not clear the state"
+            assert fake.deletes == [], f"the arming write deleted {fake.deletes}"
+            print("ok  a configured camera_1 arms with one POST and a real armed_since, re-arming "
+                  "is idempotent, disarming always works, and no arming request deleted anything")
+
+            # Not ready means refused to arm, but never refused to disarm.
+            fake.config = False
+            fake.events.append(retain_event("newc01", "camera_1", int(time.time()) - 1,
+                                            zones=["camera_1_restricted"]))
+            status, _headers, body = arm(port, "camera_1", True)
+            assert status == 409, f"arming a camera with no readable config answered {status}: {body!r}"
+            assert not entry_state(port)["state"]["camera_1"]["armed"], \
+                "a refused arming still armed the camera"
+            status, _headers, body = arm(port, "camera_1", False)
+            assert status == 200, \
+                f"disarming with no readable config answered {status}: {body!r}"
+            assert json.loads(body)["state"]["camera_1"]["armed"] is False, \
+                "a disarm did not clear the state while the config was unreadable"
+            print("ok  with Frigate's config unreadable the camera reads not ready and arming is "
+                  "refused, while disarming still works, so a camera that stopped being ready "
+                  "can never be stuck armed")
+
+            text = leaks(output)
+            assert "CREDENTIAL-MARKER" not in text and CREDENTIAL_MARKER not in text, \
+                "the config's RTSP credential reached the gateway's output"
+            assert "rtsp://" not in text, f"an RTSP URL reached the output:\n{text}"
+    return fake
+
+
+def check_entry_status_hides_the_config():
+    """The config carries RTSP credentials, so the status must carry none of it."""
+    fake = FakeFrigate(console_fixture())
+    with serving(fake) as base:
+        with gateway(base) as (port, output):
+            payload = entry_state(port)
+            blob = json.dumps(payload)
+            for leak in ("CREDENTIAL-MARKER", "rtsp://", "camera_9_area", "ffmpeg", "detect",
+                         "192.0.2.10", "password", "track"):
+                assert leak not in blob, f"{leak!r} reached the entry status: {blob}"
+            assert payload["notice"] and isinstance(payload["notice"], str), "no restart notice"
+            assert json.dumps(payload) == blob, "the status shape is not stable"
+            # A refusal carries no config either.
+            status, _headers, body = arm(port, "camera_2", True)
+            assert status == 400, f"a refused arming answered HTTP {status}: {body!r}"
+            for leak in ("CREDENTIAL-MARKER", "rtsp://"):
+                assert leak not in body.decode(), f"{leak!r} reached a refusal: {body!r}"
+            leaks(output)
+            print("ok  the entry status and its refusals carry two booleans and one number per "
+                  "camera and nothing from Frigate's config, which is where the RTSP credentials "
+                  "live")
+
+
+def check_entry_and_deletion_are_independent():
+    """Arming changes what a pass keeps and nothing about what an operator may reach.
+
+    The archive scope is the one an operator has to be able to use, so it cannot
+    move when the retention policy does.
+    """
+    fake = FakeFrigate(console_fixture())
+    with serving(fake) as base:
+        with gateway(base) as (port, output):
+            eligible = len(eligible_ids(fake))
+            summary = reply(port)
+            assert summary["count"] == eligible, \
+                f"the archive counted {summary['count']} of {eligible} while disarmed"
+            status, _headers, body = arm(port, "camera_1", True)
+            assert status == 200, f"arming answered HTTP {status}: {body!r}"
+            assert reply(port)["count"] == eligible, "arming changed what the archive reaches"
+            target = [event_id for event_id, tag in
+                      ((row["id"], row["id"].rsplit("-", 1)[-1]) for row in fake.events)
+                      if tag.startswith("a000")]
+            status, _headers, body = call(port, "POST", retain.DELETE_PATH,
+                                          body={"ids": sorted(target)},
+                                          action=retain.ACTION_VALUE)
+            assert status == 200, f"a named delete answered HTTP {status}: {body!r}"
+            result = json.loads(body)
+            assert result["deleted"] == len(target), f"deleted {result} for {len(target)} ids"
+            assert result["failed"] == [], f"an armed camera refused a deletable row: {result}"
+            assert fake.deletes == sorted(target), f"upstream saw {fake.deletes}"
+            print(f"ok  the archive scope is identical disarmed and armed ({eligible} rows), and "
+                  f"{len(target)} of them still delete by name afterwards, so what an operator "
+                  f"may reach does not move with the retention policy")
+            leaks(output)
+
+
 def main():
-    print("checking the retention deletion gateway against a fake Frigate")
+    print("checking the retention gateway against a fake Frigate")
     check_defaults()
     for check in (check_guards, check_bodies, check_summary, check_events_pages,
                   check_events_camera_filter, check_events_query_refusals,
                   check_selected_delete, check_partial_failures, check_archive_delete,
-                  check_page_cap_fails_closed, check_poll_never_deletes):
+                  check_page_cap_fails_closed, check_entry_arming,
+                  check_entry_status_hides_the_config,
+                  check_entry_and_deletion_are_independent, check_poll_never_deletes):
         check()
     print("\nPASS  every assertion held")
     return 0
