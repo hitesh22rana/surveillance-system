@@ -1136,7 +1136,7 @@ class Worker:
         return retain.EXIT_OK
 
 
-class StatusHandler(http.server.BaseHTTPRequestHandler):
+class StatusHandler(retain.JsonHandler):
     """One read-only route, and a refusal for everything else.
 
     The Host is checked because the browser only reaches this through the dashboard,
@@ -1146,38 +1146,7 @@ class StatusHandler(http.server.BaseHTTPRequestHandler):
     appends can select a camera or widen anything.
     """
 
-    protocol_version = "HTTP/1.0"
     server_version = "surveillance-fighting"
-    sys_version = ""  # the base class would otherwise send the interpreter version
-    status = 0
-
-    def do_GET(self):
-        self._route()
-
-    do_POST = do_HEAD = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_TRACE = do_GET
-
-    def log_message(self, *args):
-        pass  # one line per request is written by _route, not by the base class
-
-    def send_error(self, code, message=None, explain=None):
-        """Every refusal is JSON, including the ones the base class raises for a bad
-        request line, an oversized header or a method it does not implement."""
-        self.close_connection = True
-        self._json(code, {"error": "refused"})
-
-    def _json(self, status, payload):
-        body = json.dumps(payload).encode("utf-8")
-        self.status = status
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("Cache-Control", "no-store")
-        # No Access-Control-Allow-Origin, ever: this replies to the dashboard, and
-        # to nothing else.
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(body)
 
     def _route(self):
         method = self.command

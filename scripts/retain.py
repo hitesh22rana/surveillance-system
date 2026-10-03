@@ -1117,18 +1117,13 @@ def delete_plan(body, now):
     return "all", float(cutoff)
 
 
-class Gateway(http.server.BaseHTTPRequestHandler):
-    """Four endpoints - summary, events, delete and entry - and a refusal for
-    everything else.
-
-    The Host is checked on each, because the browser only ever reaches this
-    through the dashboard, and a request naming any other origin is not the
-    dashboard's. No CORS header is ever sent, so no other page can read a reply
-    even if it manages to send one.
+class JsonHandler(http.server.BaseHTTPRequestHandler):
+    """The reply protocol both workers answer with, so no CORS header and no
+    refusal shape can differ between the two. A subclass adds server_version and
+    _route, and nothing else.
     """
 
     protocol_version = "HTTP/1.0"
-    server_version = "surveillance-retention"
     sys_version = ""  # the base class would otherwise send the interpreter version
     status = 0
 
@@ -1138,7 +1133,7 @@ class Gateway(http.server.BaseHTTPRequestHandler):
     do_POST = do_HEAD = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = do_TRACE = do_GET
 
     def log_message(self, *args):
-        pass  # one summary line per request is written by _route, not by the base class
+        pass  # one line per request is written by _route, not by the base class
 
     def send_error(self, code, message=None, explain=None):
         """Every refusal is JSON, including the ones the base class raises for a bad
@@ -1159,6 +1154,19 @@ class Gateway(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+
+class Gateway(JsonHandler):
+    """Four endpoints - summary, events, delete and entry - and a refusal for
+    everything else.
+
+    The Host is checked on each, because the browser only ever reaches this
+    through the dashboard, and a request naming any other origin is not the
+    dashboard's. No CORS header is ever sent, so no other page can read a reply
+    even if it manages to send one.
+    """
+
+    server_version = "surveillance-retention"
 
     def _route(self):
         method = self.command
