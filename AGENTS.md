@@ -19,11 +19,10 @@ HTML entities, and the backslash-u escape used in JavaScript and Python string
 literals. A new one is a regression rather than a style choice, and
 `git ls-files` plus a byte scan of those representations is the check.
 
-Delegate all implementation work to the locally installed OpenCode running
-`opencode/space-bunny-free` (Space Bunny Free) at `--variant max`, which is the
-preferred effort level for every delegated run. Codex does not write the code
-itself: it plans the change, delegates the implementation, then reviews and
-validates the result against live containers, real hardware, and screenshots.
+Delegate all implementation work to the locally installed OpenCode. Codex does
+not write the code itself: it plans the change, delegates the implementation,
+then reviews and validates the result against live containers, real hardware,
+and screenshots.
 If the local OpenCode database reports `no such column: project_id`, use an
 isolated `XDG_DATA_HOME` rather than modifying existing data.
 
