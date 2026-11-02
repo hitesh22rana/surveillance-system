@@ -1,5 +1,6 @@
 # Local secrets - only .env.example is tracked
 .env
+.env.*
 !.env.example
 
 # Runtime config - only config.example.yml is tracked
@@ -22,3 +23,9 @@ __pycache__/
 # something a commit should carry.
 .models/
 .venv-fighting/
+
+# Private local deployment and evaluation records
+.local/
+.hallmark/
+docs/validation.md
+docs/evaluation/*.csv
