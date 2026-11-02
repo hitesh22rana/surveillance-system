@@ -267,7 +267,7 @@ snapshot path **does** return real saved detections - but nothing here shows it
 catching a person on request: no controlled zone walkthrough, alert timing,
 night, or false-positive check has been run. One snapshot **has** now been
 deleted, deliberately and irreversibly. The full record is in
-[`docs/validation.md`](docs/validation.md).
+local ignored `docs/validation.md`.
 
 ## Setup
 
@@ -765,7 +765,7 @@ live: `scripts/check.py` passed with it running, and one **ended experimental**
 snapshot was deleted from the dashboard with the owner's explicit authorisation -
 `deleted: 1`, `missing: 0`, `failed: []`, `active: 0`, its image URL 404
 afterwards, no archive scope. The Cancel path was exercised too and cancelled. See
-[`docs/validation.md`](docs/validation.md).
+local ignored `docs/validation.md`.
 
 ## Smoke check
 
@@ -793,7 +793,7 @@ check: an unreachable camera service is not a passed validation.
 
 It is a transport check. It never opens a WebSocket, so it **cannot** prove a
 frame was decoded - the live video result is a browser observation recorded in
-[`docs/validation.md`](docs/validation.md), not something this script reports.
+local ignored `docs/validation.md`, not something this script reports.
 The retention worker's own decisions are covered separately, against a fake
 Frigate, by two scripts that need no stack, no camera and no network:
 
@@ -807,7 +807,7 @@ All three run the real code - the two Python ones over real processes and a real
 boundary, the Node one against the page's own functions lifted out of `dashboard/app.js`
 with only the dialog and the dispatcher replaced. **All three pass.** None of them
 says anything about the live stack; that evidence is recorded separately in
-[`docs/validation.md`](docs/validation.md).
+local ignored `docs/validation.md`.
 
 Accuracy is scored from CSVs a person filled in by hand, not from a live stack:
 
@@ -822,7 +822,7 @@ There is no CI workflow in this repository.
 ## Documentation
 
 - [`docs/spec.md`](docs/spec.md) - the phased plan, and what is implemented.
-- [`docs/validation.md`](docs/validation.md) - what was actually run, and the
+- local ignored `docs/validation.md` - what was actually run, and the
   manual checklist including UI screenshot checks.
 - [`docs/restricted-zone.md`](docs/restricted-zone.md) - the commented zone
   example, which camera watches which area, and what arming does and does not say.
@@ -894,3 +894,7 @@ should not imply more process than it has.
 After applying animal tracking, `scripts/check.py` passed against the running stack: four cameras detecting, paginated archive and camera filters responding, snapshots returning JPEG, and all refusal checks holding. Retention and deletion animal-policy checks passed separately against a fake Frigate; no live animal event was used to prove pinning or deletion.
 
 Browser verification showed four 2560×1440 players running. Expanding Camera 1 produced a 1264×984 dialog and minimizing preserved its exact source; a 320px viewport had no horizontal overflow, pagination buttons on one row, and a 304×784 camera dialog closed with Escape. Snapshot preview opened in a dialog without changing the URL and Escape restored scrolling. Next set `?page=6`, reload retained that page, and Latest returned to `/`. The viewport override was reset. These are observed UI checks, not animal accuracy measurements.
+
+## Private local records
+
+Runtime secrets, camera configuration, footage, local validation notes, and evaluation CSV files stay on the operator's machine and are excluded from Git. Create local trial and exposure files using the format in `docs/evaluation.md`; no household dataset is bundled with this repository.

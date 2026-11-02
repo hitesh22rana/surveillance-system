@@ -19,7 +19,7 @@ deleted through the dashboard on the owner's explicit authorisation. What is sti
 unverified is the detection work itself: a controlled zone walkthrough, accuracy
 measurement, night behaviour, and alert timing - and, on retention, an actual
 six-hour expiry, a retained event followed past six hours, and the CLI deletion
-path. See [`validation.md`](validation.md) for exactly what was and was not run.
+path. See local ignored `validation.md` for exactly what was and was not run.
 
 ## Current policy - 2026-10-02 update
 
@@ -281,7 +281,7 @@ rain, or when the host is loaded.
   **Met as of 2026-10-02:** four players, 2560×1440 HEVC decoded, no errors. This
   says the live path works, not that detection is any good.
 - Every camera independently passes the Phase 1 checks in
-  [`validation.md`](validation.md). Zone walkthrough, accuracy, night, and alert
+  local ignored `validation.md`. Zone walkthrough, accuracy, night, and alert
   timing are all still pending.
 - Per-camera detector load is measured, not assumed. If a camera pushes
   detection past the 5 second target on cameras already accepted, that camera
